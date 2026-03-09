@@ -1,0 +1,29 @@
+## Node dependencies
+backend/node_modules/
+frontend/node_modules/
+
+## Build outputs
+backend/dist/
+backend/coverage/
+frontend/.next/
+frontend/out/
+
+## Local env files
+backend/.env
+frontend/.env.local
+frontend/.env
+
+## Firebase local artifacts
+frontend/.firebase/
+
+## Uploaded files
+backend/uploads/
+
+## Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+## Editor
+.idea/
+.vscode/
