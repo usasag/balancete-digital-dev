@@ -4,9 +4,11 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { Role } from "@/types/role";
+import { Grau } from "@/types/grau";
 
 interface User extends FirebaseUser {
   role?: Role;
+  grau?: Grau;
   nucleoId?: string;
   nucleo?: { id: string; nome: string };
   backendToken?: string;
@@ -51,6 +53,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
               backendToken: token,
               backendId: userData.id,
               role: userData.role,
+              grau: userData.grau,
               nucleoId: userData.nucleo?.id,
               nucleo: userData.nucleo,
               // Merge other backend fields if needed

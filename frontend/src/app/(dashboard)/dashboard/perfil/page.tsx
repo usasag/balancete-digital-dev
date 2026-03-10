@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function ProfilePage() {
-  const { user, role } = useAuth();
+  const { user } = useAuth();
 
   if (!user) {
     return <div>Carregando...</div>;
@@ -36,10 +36,10 @@ export default function ProfilePage() {
           </div>
           <div>
             <span className="font-semibold text-muted-foreground block">
-              Função (Role):
+              Grau:
             </span>
             <span className="px-2 py-1 rounded bg-blue-100 text-blue-800 text-sm font-bold dark:bg-blue-900 dark:text-blue-100">
-              {role}
+              {user.grau || "-"}
             </span>
           </div>
           <div>

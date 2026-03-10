@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function DashboardPage() {
-  const { user, role } = useAuth();
+  const { user } = useAuth();
 
   return (
     <div className="space-y-6">
@@ -26,10 +26,12 @@ export default function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Minha Função</CardTitle>
+            <CardTitle>Meu Grau</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-xl font-medium text-muted-foreground">{role}</p>
+            <p className="text-xl font-medium text-muted-foreground">
+              {user?.grau || "-"}
+            </p>
           </CardContent>
         </Card>
 

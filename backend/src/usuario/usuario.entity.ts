@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { Nucleo } from '../nucleo/nucleo.entity';
 import { Role } from '../common/enums/role.enum';
+import { Grau } from '../common/enums/grau.enum';
 
 @Entity('usuario')
 @Index(['email'])
@@ -39,6 +40,13 @@ export class Usuario {
 
   @Column({ nullable: true })
   cargo: string;
+
+  @Column({
+    type: 'enum',
+    enum: Grau,
+    nullable: true,
+  })
+  grau: Grau;
 
   @Column('simple-array', { nullable: true })
   tags: string[];

@@ -1,0 +1,6 @@
+export enum Grau {
+  Q_SOCIOS = 'Q. SÓCIOS',
+  C_INSTRUTIVO = 'C. INSTRUTIVO',
+  C_CONSELHO = 'C. CONSELHO',
+  Q_MESTRES = 'Q. MESTRES',
+}

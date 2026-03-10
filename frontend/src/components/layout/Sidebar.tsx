@@ -41,7 +41,7 @@ function NavItem({ href, icon: Icon, label, onClose }: NavItemProps) {
       <Button
         variant="ghost"
         className={cn(
-          "w-full justify-start hover:bg-slate-800 hover:text-white",
+          "w-full cursor-pointer justify-start hover:bg-slate-800 hover:text-white",
           isActive && "bg-slate-800 text-white font-medium",
         )}
       >
@@ -83,7 +83,7 @@ export function Sidebar({ className, onClose }: SidebarProps) {
             variant="ghost"
             size="icon"
             onClick={onClose}
-            className="md:hidden text-white hover:bg-slate-800"
+            className="md:hidden cursor-pointer text-white hover:bg-slate-800"
           >
             <Menu className="h-5 w-5" />
           </Button>
@@ -249,7 +249,7 @@ export function Sidebar({ className, onClose }: SidebarProps) {
         </div>
         <Button
           variant="destructive"
-          className="w-full justify-start"
+          className="w-full cursor-pointer justify-start"
           onClick={handleLogout}
         >
           <LogOut className="mr-2 h-4 w-4" />

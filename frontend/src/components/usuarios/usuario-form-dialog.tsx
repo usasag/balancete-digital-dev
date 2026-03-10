@@ -14,6 +14,14 @@ import { Label } from "@/components/ui/label";
 import { UsuarioService } from "@/services/usuario-service";
 import { toast } from "sonner";
 import { Usuario } from "@/types/usuario";
+import { GRAU_OPTIONS, Grau } from "@/types/grau";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface UsuarioFormDialogProps {
   open: boolean;
@@ -30,10 +38,12 @@ export function UsuarioFormDialog({
 }: UsuarioFormDialogProps) {
   const [loading, setLoading] = useState(false);
   const [valorBase, setValorBase] = useState<number>(0);
+  const [grau, setGrau] = useState<Grau | "">("");
 
   useEffect(() => {
     if (usuario) {
       setValorBase(usuario.valor_base || 0);
+      setGrau(usuario.grau || "");
     }
   }, [usuario]);
 
@@ -44,6 +54,7 @@ export function UsuarioFormDialog({
     try {
       await UsuarioService.update(usuario.id, {
         valor_base: valorBase,
+        grau: grau || undefined,
       });
       toast.success("Usuário atualizado com sucesso.");
       onSuccess();
@@ -60,7 +71,9 @@ export function UsuarioFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Editar Usuário: {usuario?.nomeCompleto}</DialogTitle>
+          <DialogTitle>
+            Editar valor da mensalidade de {usuario?.nomeCompleto}
+          </DialogTitle>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
@@ -73,6 +86,27 @@ export function UsuarioFormDialog({
               value={valorBase}
               onChange={(e) => setValorBase(Number(e.target.value))}
             />
+          </div>
+          <div className="space-y-2">
+            <Label>Grau</Label>
+            <Select
+              value={grau || "__NONE__"}
+              onValueChange={(value) =>
+                setGrau(value === "__NONE__" ? "" : (value as Grau))
+              }
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Selecione o grau" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__NONE__">Sem grau</SelectItem>
+                {GRAU_OPTIONS.map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <DialogFooter>
             <Button

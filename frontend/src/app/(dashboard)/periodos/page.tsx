@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Periodo, periodoService } from "@/services/periodo-service";
+import {
+  Lancamento,
+  lancamentoService,
+} from "@/services/lancamento-service";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -14,16 +18,19 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Lock, Unlock, Calendar, FolderOpen, History } from "lucide-react";
+import { formatCurrency } from "@/lib/utils";
+import {
+  Lock,
+  Unlock,
+  Calendar,
+  FolderOpen,
+  History,
+  ChevronLeft,
+  ChevronRight,
+  AlertTriangle,
+} from "lucide-react";
 
 const MONTHS = [
   "Janeiro",
@@ -42,14 +49,19 @@ const MONTHS = [
 
 export default function PeriodosPage() {
   const { user } = useAuth();
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth() + 1;
+  const minYear = 2024;
+  const maxYear = currentYear + 3;
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
-  const [selectedYear, setSelectedYear] = useState<number>(
-    new Date().getFullYear(),
-  );
+  const [lancamentos, setLancamentos] = useState<Lancamento[]>([]);
+  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
 
   // Reabertura Dialog State
   const [isReabrirDialogOpen, setIsReabrirDialogOpen] = useState(false);
   const [periodoToReopen, setPeriodoToReopen] = useState<Periodo | null>(null);
+  const [pendingMonth, setPendingMonth] = useState<number | null>(null);
+  const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
   const [justificativa, setJustificativa] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -57,8 +69,12 @@ export default function PeriodosPage() {
     if (!user?.nucleoId) return;
     // setLoading(true);
     try {
-      const data = await periodoService.findAllByNucleo(user.nucleoId);
-      setPeriodos(data);
+      const [periodosData, lancamentosData] = await Promise.all([
+        periodoService.findAllByNucleo(user.nucleoId),
+        lancamentoService.findAllByNucleo(user.nucleoId),
+      ]);
+      setPeriodos(periodosData);
+      setLancamentos(lancamentosData);
     } catch (error) {
       console.error(error);
       toast.error("Erro ao buscar períodos.");
@@ -143,6 +159,22 @@ export default function PeriodosPage() {
     return periodos.find((p) => p.mes === mes && p.ano === selectedYear);
   };
 
+  const pendingTransactions =
+    pendingMonth === null
+      ? []
+      : lancamentos
+          .filter((l) => {
+            const date = new Date(l.data_movimento);
+            const sameMonth = date.getMonth() + 1 === pendingMonth;
+            const sameYear = date.getFullYear() === selectedYear;
+            return l.status === "RASCUNHO" && sameMonth && sameYear;
+          })
+          .sort(
+            (a, b) =>
+              new Date(b.data_movimento).getTime() -
+              new Date(a.data_movimento).getTime(),
+          );
+
   if (!user) return null;
 
   return (
@@ -156,26 +188,35 @@ export default function PeriodosPage() {
             Controle a abertura e fechamento dos meses contábeis.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Label>Ano:</Label>
-          <Select
-            value={String(selectedYear)}
-            onValueChange={(val) => setSelectedYear(Number(val))}
-          >
-            <SelectTrigger className="w-[120px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Array.from(
-                { length: 5 },
-                (_, i) => new Date().getFullYear() - 2 + i,
-              ).map((yr) => (
-                <SelectItem key={yr} value={String(yr)}>
-                  {yr}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="w-full md:w-auto">
+          <Label className="mb-2 block">Ano</Label>
+          <div className="flex items-center justify-between rounded-xl border bg-card px-2 py-2 md:min-w-[260px]">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => setSelectedYear((prev) => Math.max(minYear, prev - 1))}
+              disabled={selectedYear <= minYear}
+              aria-label="Ano anterior"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </Button>
+
+            <div className="px-4 text-2xl font-bold tracking-wide tabular-nums">
+              {selectedYear}
+            </div>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => setSelectedYear((prev) => Math.min(maxYear, prev + 1))}
+              disabled={selectedYear >= maxYear}
+              aria-label="Próximo ano"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -185,6 +226,10 @@ export default function PeriodosPage() {
           const periodo = getPeriodoForMonth(mes);
           const isOpen = periodo?.status === "ABERTO";
           const isClosed = periodo?.status === "FECHADO";
+          const isPastNotOpened =
+            !periodo &&
+            (selectedYear < currentYear ||
+              (selectedYear === currentYear && mes < currentMonth));
           const pendencias = periodo?.pendencias || 0;
           const hasPendencias = pendencias > 0;
 
@@ -251,11 +296,34 @@ export default function PeriodosPage() {
                         </span>
                       )
                     ) : (
-                      "Período não iniciado. Abra para começar."
+                      <span
+                        className={
+                          isPastNotOpened
+                            ? "flex items-center gap-1 text-amber-700 font-medium"
+                            : ""
+                        }
+                      >
+                        {isPastNotOpened && <AlertTriangle className="h-3 w-3" />}
+                        {isPastNotOpened
+                          ? "Mês já encerrado no calendário e ainda não foi aberto."
+                          : "Período não iniciado. Abra para começar."}
+                      </span>
                     )}
                   </div>
 
                   <div className="flex justify-end gap-2">
+                    {isOpen && hasPendencias && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          setPendingMonth(mes);
+                          setPendingDialogOpen(true);
+                        }}
+                      >
+                        Ver pendências
+                      </Button>
+                    )}
                     {!periodo && (
                       <Button
                         size="sm"
@@ -333,6 +401,58 @@ export default function PeriodosPage() {
               disabled={!justificativa || actionLoading}
             >
               Confirmar Reabertura
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pendingDialogOpen} onOpenChange={setPendingDialogOpen}>
+        <DialogContent className="w-[95vw] sm:max-w-4xl md:max-w-5xl lg:max-w-6xl">
+          <DialogHeader>
+            <DialogTitle>
+              Pendências de {pendingMonth ? MONTHS[pendingMonth - 1] : "-"}/{" "}
+              {selectedYear}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="max-h-[60vh] overflow-auto space-y-2">
+            {pendingTransactions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Nenhum lançamento pendente encontrado para este mês.
+              </p>
+            ) : (
+              pendingTransactions.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-md border p-3 flex items-start justify-between gap-4"
+                >
+                  <div>
+                    <p className="font-medium">{item.descricao}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(item.data_movimento).toLocaleDateString()} - {" "}
+                      {item.categoria || "Geral"}
+                      {item.subcategoria ? ` / ${item.subcategoria}` : ""}
+                    </p>
+                    {item.observacao && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {item.observacao}
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <Badge variant="secondary">RASCUNHO</Badge>
+                    <p className="text-sm font-semibold mt-2">
+                      {formatCurrency(item.valor)}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingDialogOpen(false)}>
+              Fechar
             </Button>
           </DialogFooter>
         </DialogContent>

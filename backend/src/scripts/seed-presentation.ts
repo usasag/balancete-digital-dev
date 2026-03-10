@@ -14,16 +14,17 @@ import { ConfiguracaoFinanceira } from '../configuracao/configuracao.entity';
 import { Periodo, PeriodoStatus } from '../periodo/periodo.entity';
 import { BalanceteStatus } from '../balancete/balancete.entity';
 import { UsuarioTaxa } from '../usuario-taxa/usuario-taxa.entity';
+import { Grau } from '../common/enums/grau.enum';
 
 dotenv.config();
 
 const dataSource = new DataSource({
   type: 'postgres',
-  host: process.env.DATABASE_HOST || 'localhost',
+  host: process.env.DATABASE_HOST || '127.0.0.1',
   port: parseInt(process.env.DATABASE_PORT || '5432'),
-  username: process.env.DATABASE_USER || 'postgres',
-  password: process.env.DATABASE_PASSWORD || 'postgres',
-  database: process.env.DATABASE_NAME || 'balancete_db',
+  username: process.env.DATABASE_USER || 'admin',
+  password: process.env.DATABASE_PASSWORD || 'adminpassword',
+  database: process.env.DATABASE_NAME || 'balancete_digital',
   entities: [
     Nucleo,
     Usuario,
@@ -202,22 +203,33 @@ async function seed() {
       name: 'Presidente Vitor',
       email: 'vitorbispobsb@gmail.com',
       role: Role.PRESIDENCIA,
+      grau: Grau.Q_MESTRES,
     },
     {
       name: 'Tesoureiro Vitor',
       email: 'vitorbrauna22@gmail.com',
       role: Role.TESOURARIA,
+      grau: Grau.C_CONSELHO,
     },
     {
       name: 'Conselho Vitor',
       email: 'vitor.brauna22@gmail.com',
       role: Role.CONSELHO_FISCAL,
+      grau: Grau.C_INSTRUTIVO,
     },
     {
       name: 'Contabilidade',
       email: 'contabilidade@example.com',
       role: Role.CONTABILIDADE_UNICA,
+      grau: Grau.C_CONSELHO,
     },
+  ];
+
+  const grausDisponiveis = [
+    Grau.Q_SOCIOS,
+    Grau.C_INSTRUTIVO,
+    Grau.C_CONSELHO,
+    Grau.Q_MESTRES,
   ];
 
   for (const sp of specialUsers) {
@@ -225,6 +237,7 @@ async function seed() {
     u.nomeCompleto = sp.name;
     u.email = sp.email;
     u.role = sp.role;
+    u.grau = sp.grau;
     u.nucleo = nucleo;
     u.valor_base = 180.0; // Standard for admins
     u.firebaseUid = `uid_${sp.email}`;
@@ -237,6 +250,8 @@ async function seed() {
     u.nomeCompleto = generateName(i);
     u.email = `user${i}@example.com`;
     u.role = Role.SOCIO;
+    u.grau =
+      grausDisponiveis[Math.floor(Math.random() * grausDisponiveis.length)];
     u.nucleo = nucleo;
 
     // Random Base between 90 and 300 with decimals

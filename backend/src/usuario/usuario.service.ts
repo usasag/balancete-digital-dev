@@ -19,6 +19,7 @@ export class UsuarioService {
         'email',
         'nomeCompleto',
         'role',
+        'grau',
         'firebaseUid',
         'nucleoId',
       ], // Ensure role and nucleoId are selected

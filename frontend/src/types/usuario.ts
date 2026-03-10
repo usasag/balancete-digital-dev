@@ -1,11 +1,13 @@
 
 import { Role } from "./role";
+import { Grau } from "./grau";
 
 export interface Usuario {
   id: string;
   email: string;
   nomeCompleto: string;
   role: Role;
+  grau?: Grau;
   firebaseUid?: string;
   nucleoId: string;
   ativo: boolean;
