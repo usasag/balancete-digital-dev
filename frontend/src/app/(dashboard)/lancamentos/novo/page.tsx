@@ -73,36 +73,19 @@ export default function NovoLancamento() {
     }
   };
 
-  const convertFileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = (error) => reject(error);
-    });
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.nucleoId || !user?.backendId) return;
 
     setLoading(true);
     try {
-      let comprovanteUrl = undefined;
-      if (file) {
-        // Here we would upload to storage. For prototype, base64.
-        // We can just verify logic: if status is REGISTRADO, wait, backend expects URL string.
-        comprovanteUrl = await convertFileToBase64(file);
-      }
-
       await lancamentoService.create({
         ...formData,
         valor: parseFloat(formData.valor),
         nucleoId: user.nucleoId,
         criadoPorId: user.backendId!,
-        comprovante_url: comprovanteUrl,
         caixaId: formData.caixaId || undefined,
-      });
+      }, file || undefined);
       router.push("/lancamentos");
     } catch (error) {
       console.error(error);

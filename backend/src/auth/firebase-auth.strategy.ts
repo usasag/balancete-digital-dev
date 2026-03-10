@@ -8,7 +8,7 @@ interface FirebaseUserPayload {
   uid?: string;
   user_id?: string;
   email?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 @Injectable()
@@ -52,9 +52,6 @@ export class FirebaseAuthStrategy extends PassportStrategy(
 
     // Safety check
     if (!firebaseUser || (!firebaseUser.uid && !firebaseUser.user_id)) {
-      // If we still don't have a UID, and it's an object, maybe it's junk.
-      // Let's rely on the explicit verification if possible.
-      console.log('Decoded Payload (Debug):', firebaseUser);
       throw new UnauthorizedException('Token inválido: UID não encontrado.');
     }
 
@@ -68,9 +65,6 @@ export class FirebaseAuthStrategy extends PassportStrategy(
       user = await this.usuarioService.findByEmail(email);
       if (user) {
         user = await this.usuarioService.update(user.id, { firebaseUid });
-        console.log(
-          `[Auth] Auto-linked user ${email} to Firebase UID ${firebaseUid}`,
-        );
       }
     }
 

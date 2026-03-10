@@ -9,6 +9,7 @@ import {
   ManyToOne,
 } from 'typeorm';
 import { Nucleo } from '../nucleo/nucleo.entity';
+import { Caixa } from '../caixa/caixa.entity';
 
 @Entity('configuracao_financeira')
 export class ConfiguracaoFinanceira {
@@ -23,23 +24,23 @@ export class ConfiguracaoFinanceira {
   nucleoId: string;
 
   // Caixas de Destino Automático
-  @ManyToOne('Caixa', { nullable: true })
+  @ManyToOne(() => Caixa, { nullable: true })
   @JoinColumn({ name: 'caixa_dg_id' })
-  caixaDg: any;
+  caixaDg: Caixa | null;
 
   @Column({ name: 'caixa_dg_id', nullable: true })
   caixaDgId: string;
 
-  @ManyToOne('Caixa', { nullable: true })
+  @ManyToOne(() => Caixa, { nullable: true })
   @JoinColumn({ name: 'caixa_regiao_id' })
-  caixaRegiao: any;
+  caixaRegiao: Caixa | null;
 
   @Column({ name: 'caixa_regiao_id', nullable: true })
   caixaRegiaoId: string;
 
-  @ManyToOne('Caixa', { nullable: true })
+  @ManyToOne(() => Caixa, { nullable: true })
   @JoinColumn({ name: 'caixa_nucleo_id' })
-  caixaNucleo: any;
+  caixaNucleo: Caixa | null;
 
   @Column({ name: 'caixa_nucleo_id', nullable: true })
   caixaNucleoId: string;

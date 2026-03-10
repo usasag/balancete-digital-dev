@@ -50,6 +50,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { UsuarioService } from "@/services/usuario-service";
+import {
   MoreHorizontal,
   Printer,
   Plus,
@@ -59,6 +67,7 @@ import {
 } from "lucide-react";
 
 export default function MensalidadeDashboard() {
+  const ALL_FILTER_VALUE = "__ALL__";
   const { user } = useAuth();
   const [mensalidades, setMensalidades] = useState<Mensalidade[]>([]);
   const [myMensalidades, setMyMensalidades] = useState<Mensalidade[]>([]);
@@ -78,7 +87,7 @@ export default function MensalidadeDashboard() {
     { id: string; nomeCompleto: string }[]
   >([]);
   const [proofFile, setProofFile] = useState<File | null>(null);
-  const [receiverId, setReceiverId] = useState<string>("");
+  const [receiverId, setReceiverId] = useState<string | undefined>(undefined);
   const [paymentDate, setPaymentDate] = useState<string>(
     new Date().toISOString().split("T")[0],
   );
@@ -104,30 +113,27 @@ export default function MensalidadeDashboard() {
 
   // Fetch users for "Recebido Por" dropdown
   useEffect(() => {
-    // Ideally fetch from userService, but we might not have a public list endpoint handy without service injection.
-    // Assuming we can fetch or we might need to rely on the current user if they are admin.
-    // Let's try to fetch active users if possible, or just mock for now if no service.
-    // Actually, we have `mensalidadeService` but `userService` is not imported.
-    // We can assume the "Recebido Por" is the current logged in user (if they are admin/treasurer) OR a list of officers.
-    // For now, let's just use a hardcoded list of "Officers" or just the current user if they are accepting.
-    // Wait, the user said "selecionar em um dropdown a quem ela fez o pagamento... Presidente, 1 Tesoureiro...".
-    // This implies the user paying (or the admin registering) selects who received.
-    // Let's fetch "all users" and filter by role if possible, or just show all for now.
-    // Since I don't have `userService` imported, let's import it.
-    // Wait, I can't import `userService` directly if it's not exported as a singleton like `mensalidadeService`.
-    // Checks `usuario.service.ts`... it's a backend service. Frontend usually needs a service too.
-    // Checking `frontend/src/services/`... there might not be a `usuario-service.ts`.
-    // Let's create a minimal fetch or just hardcode the roles for the dropdown as "Presidente", "1 Tesoureiro", etc if we can't fetch names.
-    // actually, let's use the `mensalidades` owner + some hardcoded options if needed, but better to just use current user name as default?
-    // User request: "selecionar ... Presidente, 1 Tesoureiro...". These are roles.
-    // Does it mean selecting the *Role* or the *Person*? "a quem ela fez o pagamento". Likely the person.
-    // I'll simulate a list of officers for now if I can't fetch.
-    setAdminUsers([
-      { id: "pres", nomeCompleto: "Presidente" },
-      { id: "tes1", nomeCompleto: "1º Tesoureiro" },
-      { id: "tes2", nomeCompleto: "2º Tesoureiro" },
-    ]);
-  }, []);
+    const loadAdminUsers = async () => {
+      if (!user?.nucleoId) return;
+      try {
+        const usersByNucleo = await UsuarioService.getByNucleo(user.nucleoId);
+        const allowedRoles = [
+          "PRESIDENCIA",
+          "TESOURARIA",
+          "ADMIN",
+          "ADMIN_GLOBAL",
+        ];
+        const officers = usersByNucleo
+          .filter((u) => u.ativo && allowedRoles.includes(String(u.role)))
+          .map((u) => ({ id: u.id, nomeCompleto: u.nomeCompleto }));
+        setAdminUsers(officers);
+      } catch {
+        setAdminUsers([]);
+      }
+    };
+
+    loadAdminUsers();
+  }, [user?.nucleoId]);
 
   const fetchMensalidades = useCallback(async () => {
     if (!user?.nucleoId) return;
@@ -171,7 +177,7 @@ export default function MensalidadeDashboard() {
     if (!payPixDialog) return;
     // Handle file upload logic here if backend supported it
     if (proofFile) {
-      console.log("Uploading file:", proofFile);
+      // file upload handled when backend endpoint supports attachment payload
     }
     await confirmPayment(
       payPixDialog.id,
@@ -187,14 +193,12 @@ export default function MensalidadeDashboard() {
       alert("Selecione quem recebeu o pagamento.");
       return;
     }
-    // We would pass receiverId to backend
-    console.log("Payment received by:", receiverId);
     await confirmPayment(
       payMoneyDialog.id,
       paymentDate ? new Date(paymentDate) : undefined,
     );
     setPayMoneyDialog(null);
-    setReceiverId("");
+    setReceiverId(undefined);
   };
 
   const handleRegisterAgreement = async () => {
@@ -404,9 +408,9 @@ export default function MensalidadeDashboard() {
     </div>
   );
 
-  const [monthFilter, setMonthFilter] = useState<string>("TODOS");
-  const [statusFilter, setStatusFilter] = useState<string>("TODOS");
-  const [userFilter, setUserFilter] = useState<string>("TODOS");
+  const [monthFilter, setMonthFilter] = useState<string>(ALL_FILTER_VALUE);
+  const [statusFilter, setStatusFilter] = useState<string>(ALL_FILTER_VALUE);
+  const [userFilter, setUserFilter] = useState<string>(ALL_FILTER_VALUE);
 
   // Derive Unique Months and Users for Filters
   const months = Array.from(
@@ -429,10 +433,12 @@ export default function MensalidadeDashboard() {
 
   const filteredMensalidades = mensalidades.filter((m) => {
     const matchMonth =
-      monthFilter === "TODOS" || m.mes_referencia === monthFilter;
-    const matchStatus = statusFilter === "TODOS" || m.status === statusFilter;
+      monthFilter === ALL_FILTER_VALUE || m.mes_referencia === monthFilter;
+    const matchStatus =
+      statusFilter === ALL_FILTER_VALUE || m.status === statusFilter;
 
-    const matchUser = userFilter === "TODOS" || m.socioId === userFilter;
+    const matchUser =
+      userFilter === ALL_FILTER_VALUE || m.socioId === userFilter;
     return matchMonth && matchStatus && matchUser;
   });
 
@@ -505,47 +511,54 @@ export default function MensalidadeDashboard() {
               <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="space-y-2">
                   <Label>Mês Referência</Label>
-                  <select
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    value={monthFilter}
-                    onChange={(e) => setMonthFilter(e.target.value)}
-                  >
-                    <option value="TODOS">Todos os Meses</option>
-                    {months.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
+                  <Select value={monthFilter} onValueChange={setMonthFilter}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Todos os Meses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_FILTER_VALUE}>
+                        Todos os Meses
+                      </SelectItem>
+                      {months.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label>Status</Label>
-                  <select
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                  >
-                    <option value="TODOS">Todos</option>
-                    <option value="PAGO">Pago</option>
-                    <option value="PENDENTE">Pendente</option>
-                    <option value="ATRASADO">Atrasado</option>
-                    <option value="INADIMPLENTE">Inadimplente</option>
-                  </select>
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Todos" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_FILTER_VALUE}>Todos</SelectItem>
+                      <SelectItem value="PAGO">Pago</SelectItem>
+                      <SelectItem value="PENDENTE">Pendente</SelectItem>
+                      <SelectItem value="ATRASADO">Atrasado</SelectItem>
+                      <SelectItem value="INADIMPLENTE">Inadimplente</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2 md:col-span-2">
                   <Label>Sócio</Label>
-                  <select
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    value={userFilter}
-                    onChange={(e) => setUserFilter(e.target.value)}
-                  >
-                    <option value="TODOS">Todos os Sócios</option>
-                    {users.map(([id, name]) => (
-                      <option key={id} value={id}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
+                  <Select value={userFilter} onValueChange={setUserFilter}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Todos os Sócios" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_FILTER_VALUE}>
+                        Todos os Sócios
+                      </SelectItem>
+                      {users.map(([id, name]) => (
+                        <SelectItem key={id} value={id}>
+                          {name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </CardContent>
             </Card>
@@ -815,7 +828,7 @@ export default function MensalidadeDashboard() {
         onOpenChange={(open) => {
           if (!open) {
             setPayMoneyDialog(null);
-            setReceiverId("");
+            setReceiverId(undefined);
           }
         }}
       >
@@ -860,18 +873,18 @@ export default function MensalidadeDashboard() {
                 </p>
                 <div className="grid w-full gap-2">
                   <Label>Recebido Por</Label>
-                  <select
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    value={receiverId}
-                    onChange={(e) => setReceiverId(e.target.value)}
-                  >
-                    <option value="">Selecione...</option>
-                    {adminUsers.map((u) => (
-                      <option key={u.id} value={u.nomeCompleto}>
-                        {u.nomeCompleto}
-                      </option>
-                    ))}
-                  </select>
+                  <Select value={receiverId} onValueChange={setReceiverId}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Selecione..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {adminUsers.map((u) => (
+                        <SelectItem key={u.id} value={u.nomeCompleto}>
+                          {u.nomeCompleto}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <div className="pt-4">

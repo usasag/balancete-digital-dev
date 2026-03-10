@@ -48,7 +48,7 @@ export class BalanceteMensal {
   saldo_final: number;
 
   @Column('jsonb', { nullable: true })
-  conteudo_renderizado: any;
+  conteudo_renderizado: Record<string, unknown> | null;
 
   @Column({
     type: 'enum',

@@ -4,13 +4,14 @@ import {
   Put,
   Body,
   UseGuards,
-  Request,
+  Req,
   BadRequestException,
 } from '@nestjs/common';
 import { ConfiguracaoService } from './configuracao.service';
 import { AuthGuard } from '@nestjs/passport';
 import { ConfiguracaoFinanceira } from './configuracao.entity';
 import type { DeepPartial } from 'typeorm';
+import type { RequestWithUser } from '../auth/request-with-user';
 
 @Controller('configuracao')
 @UseGuards(AuthGuard('firebase-jwt'))
@@ -18,9 +19,8 @@ export class ConfiguracaoController {
   constructor(private readonly service: ConfiguracaoService) {}
 
   @Get()
-  async get(@Request() req: any) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    const nucleoId = req.user.nucleoId as string;
+  async get(@Req() req: RequestWithUser) {
+    const nucleoId = req.user.nucleoId;
     if (!nucleoId)
       throw new BadRequestException('Usuário não está vinculado a um núcleo.');
     return this.service.findOneByNucleo(nucleoId);
@@ -28,11 +28,10 @@ export class ConfiguracaoController {
 
   @Put()
   async update(
-    @Request() req: any,
+    @Req() req: RequestWithUser,
     @Body() data: DeepPartial<ConfiguracaoFinanceira>,
   ) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    const nucleoId = req.user.nucleoId as string;
+    const nucleoId = req.user.nucleoId;
     if (!nucleoId)
       throw new BadRequestException('Usuário não está vinculado a um núcleo.');
     return this.service.update(nucleoId, data);
