@@ -1,0 +1,44 @@
+@media print {
+  @page {
+    size: auto;
+    margin: 0mm;
+  }
+
+  /* Hide everything by default */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Show only the printable area */
+  .printable-boleto,
+  .printable-boleto * {
+    visibility: visible;
+  }
+
+  /* Position absolute to fit page */
+  .printable-boleto {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 210mm; /* A4 width */
+    height: 100%;
+    margin: 0 auto; /* Center horizontally if needed, or 0 */
+    padding: 10mm; /* Add some padding for the content */
+    border: none;
+    box-shadow: none;
+    background: white;
+    z-index: 9999;
+    overflow: visible;
+  }
+
+  /* Hide print buttons and other UI clutter explicitly */
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* Color accuracy */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
