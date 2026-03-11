@@ -4,6 +4,7 @@ import {
   lancamentoService,
   Lancamento,
   CreateLancamentoDto,
+  LancamentoTemplate,
 } from "@/services/lancamento-service";
 import { caixaService, Caixa } from "@/services/caixa-service";
 import {
@@ -22,6 +23,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface LancamentoFormDialogProps {
   open: boolean;
@@ -43,6 +51,9 @@ export function LancamentoFormDialog({
   const [caixas, setCaixas] = useState<Caixa[]>([]);
   const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
   const [file, setFile] = useState<File | null>(null);
+  const [templates, setTemplates] = useState<LancamentoTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("NONE");
+  const [templateName, setTemplateName] = useState("");
 
   const [formData, setFormData] = useState({
     descricao: "",
@@ -73,6 +84,11 @@ export function LancamentoFormDialog({
             }
           }
         })
+        .catch(console.error);
+
+      lancamentoService
+        .getTemplatesByNucleo(nucleoId)
+        .then(setTemplates)
         .catch(console.error);
 
       categoriaFinanceiraService
@@ -161,6 +177,18 @@ export function LancamentoFormDialog({
         toast.success("Lançamento atualizado!");
       } else {
         await lancamentoService.create(payload, file || undefined);
+        if (templateName.trim()) {
+          await lancamentoService.createTemplate({
+            nome: templateName.trim(),
+            tipo: payload.tipo,
+            categoria: payload.categoria,
+            subcategoria: payload.subcategoria,
+            descricao: payload.descricao,
+            observacao: payload.observacao,
+            valor: payload.valor,
+            caixaId: payload.caixaId,
+          });
+        }
         toast.success("Lançamento criado!");
       }
       onSuccess();
@@ -184,6 +212,25 @@ export function LancamentoFormDialog({
   );
   const availableSubcategorias = selectedCategoriaObj?.subcategorias || [];
 
+  const applyTemplate = (id: string) => {
+    setSelectedTemplateId(id);
+    if (id === "NONE") return;
+    const selected = templates.find((t) => t.id === id);
+    if (!selected) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      tipo: selected.tipo,
+      categoria: selected.categoria,
+      subcategoria: selected.subcategoria || "",
+      descricao: selected.descricao,
+      observacao: selected.observacao || "",
+      valor: String(selected.valor),
+      caixaId: selected.caixaId || prev.caixaId,
+      status: selected.tipo === "DESPESA" ? "RASCUNHO" : prev.status,
+    }));
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -193,6 +240,36 @@ export function LancamentoFormDialog({
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
+          {!lancamentoToEdit && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Aplicar template recorrente</Label>
+                <Select value={selectedTemplateId} onValueChange={applyTemplate}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione um template" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="NONE">Nenhum</SelectItem>
+                    {templates.map((template) => (
+                      <SelectItem key={template.id} value={template.id}>
+                        {template.nome}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="template_name">Salvar como template</Label>
+                <Input
+                  id="template_name"
+                  placeholder="Ex: Conta de energia"
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="caixa">Caixa</Label>

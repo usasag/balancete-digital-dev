@@ -464,6 +464,114 @@ export class MensalidadeService {
     return this.generateMonthlyBills();
   }
 
+  async generateForReference(nucleoId: string, mesReferencia: string) {
+    const config = await this.configService.findOneByNucleo(nucleoId);
+    const activeUsers = await this.userService.findAllActive();
+    const nucleoUsers = activeUsers.filter((u) => u.nucleoId === nucleoId);
+
+    let created = 0;
+    let skipped = 0;
+
+    for (const user of nucleoUsers) {
+      const existing = await this.repo.findOne({
+        where: {
+          socio: { id: user.id },
+          mes_referencia: mesReferencia,
+        },
+      });
+
+      if (existing) {
+        skipped += 1;
+        continue;
+      }
+
+      const valorBase = Number(user.valor_base) || 0;
+      const repasseDG = Number(config.valor_repasse_dg) || 0;
+      const repasseRegiao = Number(config.valor_repasse_regiao) || 0;
+
+      const activeTaxes = await this.usuarioTaxaService.findAllByUsuario(user.id);
+      const taxesToAdd = [];
+
+      for (const userTax of activeTaxes) {
+        if (!userTax.parcelas) continue;
+
+        const installment = userTax.parcelas.find((p) => {
+          const dueDate = dayjs(p.vencimento);
+          return dueDate.format('MM/YYYY') === mesReferencia;
+        });
+
+        if (installment) {
+          taxesToAdd.push({
+            descricao: userTax.taxa.nome,
+            valor_total: Number(userTax.valor_total),
+            parcela_atual: installment.numero,
+            total_parcelas: userTax.num_parcelas,
+            valor_parcela: Number(installment.valor),
+            caixaId: userTax.taxa.caixaId,
+          });
+        }
+      }
+
+      const finalTotal =
+        valorBase +
+        repasseDG +
+        repasseRegiao +
+        taxesToAdd.reduce((sum, t) => sum + t.valor_parcela, 0);
+
+      await this.create({
+        socio: user,
+        socioId: user.id,
+        nucleo: user.nucleo,
+        nucleoId: user.nucleoId,
+        mes_referencia: mesReferencia,
+        valor_base: valorBase,
+        valor_total: finalTotal,
+        status: 'PENDENTE',
+        taxa_extra: taxesToAdd,
+        itens: [
+          {
+            nome: 'Repasse Diretoria Geral',
+            valor: repasseDG,
+            obrigatorio: true,
+            selecionado: true,
+            caixaId: config.caixaDgId,
+          },
+          {
+            nome: 'Repasse 11ª Região',
+            valor: repasseRegiao,
+            obrigatorio: true,
+            selecionado: true,
+            caixaId: config.caixaRegiaoId,
+          },
+        ],
+      });
+
+      created += 1;
+    }
+
+    return { created, skipped, totalUsers: nucleoUsers.length, mesReferencia };
+  }
+
+  async payBulk(ids: string[], paymentDate?: Date) {
+    let paid = 0;
+    const errors: Array<{ id: string; mensagem: string }> = [];
+
+    for (const id of ids) {
+      try {
+        await this.pay(id, paymentDate);
+        paid += 1;
+      } catch (error) {
+        errors.push({
+          id,
+          mensagem:
+            error instanceof Error ? error.message : 'Erro ao registrar pagamento',
+        });
+      }
+    }
+
+    return { paid, errors };
+  }
+
   async getInadimplenciaReport(
     nucleoId: string,
   ): Promise<InadimplenciaReportItem[]> {

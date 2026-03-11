@@ -69,6 +69,15 @@ export class Mensalidade {
   @Column({ nullable: true })
   data_acordo: Date;
 
+  @Column({ name: 'evidencia_drive_file_id', nullable: true })
+  evidenciaDriveFileId: string;
+
+  @Column({ name: 'evidencia_drive_folder_id', nullable: true })
+  evidenciaDriveFolderId: string;
+
+  @Column({ name: 'evidencia_web_view_link', nullable: true })
+  evidenciaWebViewLink: string;
+
   @CreateDateColumn()
   data_criacao: Date;
 

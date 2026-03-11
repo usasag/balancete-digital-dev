@@ -1,0 +1,3 @@
+tipo,descricao,valor,categoria,subcategoria,observacao,data_movimento,caixaId,status,comprovante_url
+RECEITA,Recebimento Mensalidade,180.00,Mensalidade,,Receita recebida em caixa,2026-03-01,,REGISTRADO,
+DESPESA,Conta de Energia,342.55,Energia,,Pagamento da conta de luz,2026-03-05,,RASCUNHO,https://exemplo.com/comprovante.pdf

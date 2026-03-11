@@ -26,6 +26,15 @@ export class LancamentoFinanceiro {
   @Column({ nullable: true })
   comprovante_url: string;
 
+  @Column({ name: 'evidencia_drive_file_id', nullable: true })
+  evidenciaDriveFileId: string;
+
+  @Column({ name: 'evidencia_drive_folder_id', nullable: true })
+  evidenciaDriveFolderId: string;
+
+  @Column({ name: 'evidencia_web_view_link', nullable: true })
+  evidenciaWebViewLink: string;
+
   @Column()
   descricao: string;
 

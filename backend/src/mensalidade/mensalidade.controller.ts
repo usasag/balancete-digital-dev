@@ -22,9 +22,17 @@ export class MensalidadeController {
   constructor(private readonly service: MensalidadeService) {}
 
   @Post('generate-now')
-  // @UseGuards(RolesGuard) // Ensure admin only if needed
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN_GLOBAL, Role.PRESIDENCIA, Role.TESOURARIA)
   async generateNow() {
     return await this.service.generateNow();
+  }
+
+  @Post('generate-reference')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN_GLOBAL, Role.PRESIDENCIA, Role.TESOURARIA)
+  generateReference(@Body() body: { nucleoId: string; mesReferencia: string }) {
+    return this.service.generateForReference(body.nucleoId, body.mesReferencia);
   }
 
   @Post()
@@ -62,6 +70,16 @@ export class MensalidadeController {
   @Post(':id/pay')
   pay(@Param('id') id: string, @Body() body: { date?: string }) {
     return this.service.pay(id, body.date ? new Date(body.date) : undefined);
+  }
+
+  @Post('bulk/pay')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN_GLOBAL, Role.PRESIDENCIA, Role.TESOURARIA)
+  payBulk(@Body() body: { ids: string[]; date?: string }) {
+    return this.service.payBulk(
+      body.ids || [],
+      body.date ? new Date(body.date) : undefined,
+    );
   }
 
   @Post(':id/agreement')

@@ -270,35 +270,48 @@ async function seed() {
   }
   console.log(`Created ${users.length} users.`);
 
-  // 6. Periods & Balancetes
-  const timeline = [
-    {
-      label: 'Outubro 2025',
-      date: '2025-10-01',
-      ref: '10/2025',
-      status: PeriodoStatus.ABERTO,
-    },
-    {
-      label: 'Novembro 2025',
-      date: '2025-11-01',
-      ref: '11/2025',
-      status: PeriodoStatus.ABERTO,
-    },
-    {
-      label: 'Dezembro 2025',
-      date: '2025-12-01',
-      ref: '12/2025',
-      status: PeriodoStatus.ABERTO,
-    },
-    {
-      label: 'Janeiro 2026',
-      date: '2026-01-01',
-      ref: '01/2026',
-      status: PeriodoStatus.FECHADO,
-    }, // Not initialized/opened yet logic
-  ];
+  const now = new Date();
+  const monthOffsets = [-2, -1, 0, 1];
 
-  // Create Periods and Balancetes for Oct-Dec
+  const getMonthDate = (offset: number) => {
+    const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  };
+
+  const formatRef = (date: Date) => {
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const yyyy = date.getFullYear();
+    return `${mm}/${yyyy}`;
+  };
+
+  const formatAnoMes = (date: Date) => {
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const yyyy = date.getFullYear();
+    return `${yyyy}-${mm}`;
+  };
+
+  const dueDateFor = (date: Date) => {
+    const due = new Date(date.getFullYear(), date.getMonth(), 10);
+    return due.toISOString().split('T')[0];
+  };
+
+  const paymentDateFor = (date: Date) => {
+    const pay = new Date(date.getFullYear(), date.getMonth(), 10);
+    return pay.toISOString().split('T')[0];
+  };
+
+  // 6. Periods & Balancetes
+  const timeline = monthOffsets.map((offset) => {
+    const dateObj = getMonthDate(offset);
+    return {
+      date: dateObj.toISOString().split('T')[0],
+      ref: formatRef(dateObj),
+      anoMes: formatAnoMes(dateObj),
+      status: offset <= 0 ? PeriodoStatus.ABERTO : PeriodoStatus.FECHADO,
+    };
+  });
+
+  // Create Periods and Balancetes for open months in dynamic timeline
   for (const t of timeline) {
     if (t.status === PeriodoStatus.ABERTO) {
       const dateObj = new Date(t.date);
@@ -313,7 +326,7 @@ async function seed() {
       // Create Balancete
       const balancete = balanceteRepo.create({
         nucleoId: nucleo.id,
-        ano_mes: t.ref.split('/').reverse().join('-'), // YYYY-MM
+        ano_mes: t.anoMes,
         saldo_inicial: 0,
         saldo_final: 0,
         total_receitas: 0,
@@ -448,64 +461,72 @@ async function seed() {
     const isLateUser = lateUsers.some((u) => u.email === user.email);
     const isPendingJan = pendingJanUsers.some((u) => u.email === user.email);
 
-    // Timeline:
-    // Oct 2025
+    const mMinus2 = getMonthDate(-2);
+    const mMinus1 = getMonthDate(-1);
+    const mCurrent = getMonthDate(0);
+
+    // Two months ago: mostly paid
     await generateFinancials(
       user,
-      '10/2025',
-      '2025-10-10',
-      '2025-10-10',
+      formatRef(mMinus2),
+      dueDateFor(mMinus2),
+      paymentDateFor(mMinus2),
       'PAGO',
     );
 
-    // Nov 2025
+    // Last month: late users become ATRASADO
     if (isLateUser) {
-      await generateFinancials(user, '11/2025', '2025-11-10', '', 'ATRASADO');
+      await generateFinancials(
+        user,
+        formatRef(mMinus1),
+        dueDateFor(mMinus1),
+        '',
+        'ATRASADO',
+      );
     } else {
       await generateFinancials(
         user,
-        '11/2025',
-        '2025-11-10',
-        '2025-11-10',
+        formatRef(mMinus1),
+        dueDateFor(mMinus1),
+        paymentDateFor(mMinus1),
         'PAGO',
       );
     }
 
-    // Dec 2025
+    // Current month: mix of atraso, pendente and rascunho
     if (isLateUser) {
-      await generateFinancials(user, '12/2025', '2025-12-10', '', 'ATRASADO');
-    } else {
       await generateFinancials(
         user,
-        '12/2025',
-        '2025-12-10',
-        '2025-12-10',
-        'PAGO',
+        formatRef(mCurrent),
+        dueDateFor(mCurrent),
+        '',
+        'ATRASADO',
       );
-    }
-
-    // Jan 2026
-    if (isLateUser) {
-      await generateFinancials(user, '01/2026', '2026-01-10', '', 'ATRASADO');
     } else if (isPendingJan) {
-      await generateFinancials(user, '01/2026', '2026-01-10', '', 'PENDENTE');
+      await generateFinancials(
+        user,
+        formatRef(mCurrent),
+        dueDateFor(mCurrent),
+        '',
+        'PENDENTE',
+      );
     } else {
-      // Most are draft/pending for current month usually, or partial
-      // Request said: "os períodos de Outubro, Novembro e Dezembro devem inicializar como Abertos. O de Janeiro não precisa inicializar. Coloque alguns poucos sócios com atraso na mensalidade de Janeiro"
-      // And "Crie também para este mês (01/2026) alguns lançamentos em rascunho."
-
-      // Let's make 20% Rascusnho (Draft), 80% PENDENTE (Not yet paid/drafted)?
-      // Or user said "Crie também para este mês... alguns lançamentos em rascunho"
       if (Math.random() > 0.7) {
         await generateFinancials(
           user,
-          '01/2026',
-          '2026-01-10',
+          formatRef(mCurrent),
+          dueDateFor(mCurrent),
           '',
           'RASCUNHO_JANEIRO',
         );
       } else {
-        await generateFinancials(user, '01/2026', '2026-01-10', '', 'PENDENTE');
+        await generateFinancials(
+          user,
+          formatRef(mCurrent),
+          dueDateFor(mCurrent),
+          '',
+          'PENDENTE',
+        );
       }
     }
   }
@@ -514,7 +535,10 @@ async function seed() {
   // Or we can rely on the app logic if we ran the service. But for seeding script, direct SQL update or manual calc is faster.
   // Ideally, we want the Balancete table to reflect the Lancamentos we just made.
 
-  const updateBalancete = async (anoMes: string) => {
+  const updateBalancete = async (
+    anoMes: string,
+    previousAnoMes?: string,
+  ) => {
     const balancete = await balanceteRepo.findOne({
       where: { nucleoId: nucleo.id, ano_mes: anoMes },
     });
@@ -536,17 +560,9 @@ async function seed() {
     // Need prev balance if any.
     // Simplifying: assuming sequential run
     let previousBalance = 0;
-    // VERY simple approach: October is first.
-    if (anoMes === '2025-10') previousBalance = 0;
-    if (anoMes === '2025-11') {
+    if (previousAnoMes) {
       const prev = await balanceteRepo.findOne({
-        where: { nucleoId: nucleo.id, ano_mes: '2025-10' },
-      });
-      previousBalance = Number(prev?.saldo_final || 0);
-    }
-    if (anoMes === '2025-12') {
-      const prev = await balanceteRepo.findOne({
-        where: { nucleoId: nucleo.id, ano_mes: '2025-11' },
+        where: { nucleoId: nucleo.id, ano_mes: previousAnoMes },
       });
       previousBalance = Number(prev?.saldo_final || 0);
     }
@@ -562,9 +578,14 @@ async function seed() {
     );
   };
 
-  await updateBalancete('2025-10');
-  await updateBalancete('2025-11');
-  await updateBalancete('2025-12');
+  const openAnoMes = timeline
+    .filter((t) => t.status === PeriodoStatus.ABERTO)
+    .map((t) => t.anoMes)
+    .sort((a, b) => a.localeCompare(b));
+
+  for (let i = 0; i < openAnoMes.length; i++) {
+    await updateBalancete(openAnoMes[i], i > 0 ? openAnoMes[i - 1] : undefined);
+  }
 
   console.log('Seeding Complete!');
 }

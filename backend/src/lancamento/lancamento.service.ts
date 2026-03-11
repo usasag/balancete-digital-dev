@@ -12,12 +12,37 @@ import { BalanceteService } from '../balancete/balancete.service';
 import { CaixaService } from '../caixa/caixa.service';
 import { PeriodoService } from '../periodo/periodo.service';
 import { Between } from 'typeorm';
+import { LancamentoImportLog } from './lancamento-import-log.entity';
+import { LancamentoTemplate } from './lancamento-template.entity';
+
+export interface ImportLancamentoRow {
+  linha: number;
+  tipo: 'RECEITA' | 'DESPESA';
+  descricao: string;
+  valor: number;
+  categoria: string;
+  subcategoria?: string;
+  observacao?: string;
+  data_movimento: Date;
+  caixaId?: string;
+  status?: 'RASCUNHO' | 'REGISTRADO';
+  comprovante_url?: string;
+}
+
+export interface ImportLancamentoError {
+  linha: number;
+  mensagem: string;
+}
 
 @Injectable()
 export class LancamentoService {
   constructor(
     @InjectRepository(LancamentoFinanceiro)
     private repo: Repository<LancamentoFinanceiro>,
+    @InjectRepository(LancamentoImportLog)
+    private importLogRepo: Repository<LancamentoImportLog>,
+    @InjectRepository(LancamentoTemplate)
+    private templateRepo: Repository<LancamentoTemplate>,
     @Inject(forwardRef(() => BalanceteService))
     private balanceteService: BalanceteService,
     @Inject(forwardRef(() => CaixaService))
@@ -226,5 +251,176 @@ export class LancamentoService {
         original.data_movimento,
       );
     }
+  }
+
+  buildImportPreview(rawRows: Record<string, unknown>[]): {
+    validRows: ImportLancamentoRow[];
+    errors: ImportLancamentoError[];
+  } {
+    const validRows: ImportLancamentoRow[] = [];
+    const errors: ImportLancamentoError[] = [];
+
+    rawRows.forEach((raw, index) => {
+      const linha = index + 2;
+      const tipoRaw = String(raw.tipo || '')
+        .trim()
+        .toUpperCase();
+      const descricao = String(raw.descricao || '').trim();
+      const categoria = String(raw.categoria || '').trim() || 'Geral';
+      const valorRaw = String(raw.valor || '').trim().replace(',', '.');
+      const dataRaw = String(raw.data_movimento || '').trim();
+      const statusRaw = String(raw.status || '')
+        .trim()
+        .toUpperCase();
+
+      if (tipoRaw !== 'RECEITA' && tipoRaw !== 'DESPESA') {
+        errors.push({
+          linha,
+          mensagem: 'Tipo inválido. Use RECEITA ou DESPESA.',
+        });
+        return;
+      }
+
+      if (!descricao) {
+        errors.push({ linha, mensagem: 'Descrição é obrigatória.' });
+        return;
+      }
+
+      const valor = Number(valorRaw);
+      if (!Number.isFinite(valor) || valor <= 0) {
+        errors.push({ linha, mensagem: 'Valor inválido. Informe número > 0.' });
+        return;
+      }
+
+      const dataMovimento = new Date(dataRaw);
+      if (Number.isNaN(dataMovimento.getTime())) {
+        errors.push({ linha, mensagem: 'Data inválida em data_movimento.' });
+        return;
+      }
+
+      const statusDefault =
+        tipoRaw === 'RECEITA'
+          ? ('REGISTRADO' as const)
+          : ('RASCUNHO' as const);
+
+      const statusNormalized =
+        statusRaw === 'RASCUNHO' || statusRaw === 'REGISTRADO'
+          ? (statusRaw as 'RASCUNHO' | 'REGISTRADO')
+          : statusDefault;
+
+      validRows.push({
+        linha,
+        tipo: tipoRaw as 'RECEITA' | 'DESPESA',
+        descricao,
+        valor,
+        categoria,
+        subcategoria: String(raw.subcategoria || '').trim() || undefined,
+        observacao: String(raw.observacao || '').trim() || undefined,
+        data_movimento: dataMovimento,
+        caixaId: String(raw.caixaId || '').trim() || undefined,
+        status: statusNormalized,
+        comprovante_url: String(raw.comprovante_url || '').trim() || undefined,
+      });
+    });
+
+    return { validRows, errors };
+  }
+
+  async createImportLog(data: {
+    nucleoId: string;
+    usuarioId: string;
+    arquivoNome: string;
+    totalLinhas: number;
+    linhasValidas: number;
+    linhasCriadas: number;
+    linhasComErro: number;
+    erros: Array<{ linha: number; mensagem: string }>;
+  }): Promise<LancamentoImportLog> {
+    const log = this.importLogRepo.create({
+      nucleoId: data.nucleoId,
+      usuarioId: data.usuarioId,
+      arquivoNome: data.arquivoNome,
+      totalLinhas: data.totalLinhas,
+      linhasValidas: data.linhasValidas,
+      linhasCriadas: data.linhasCriadas,
+      linhasComErro: data.linhasComErro,
+      erros: data.erros.length > 0 ? data.erros : null,
+    });
+
+    return this.importLogRepo.save(log);
+  }
+
+  async findImportLogsByNucleo(nucleoId: string): Promise<LancamentoImportLog[]> {
+    return this.importLogRepo.find({
+      where: { nucleoId },
+      relations: ['usuario'],
+      order: { dataCriacao: 'DESC' },
+    });
+  }
+
+  async findTemplatesByNucleo(nucleoId: string): Promise<LancamentoTemplate[]> {
+    return this.templateRepo.find({
+      where: { nucleoId, ativo: true },
+      order: { nome: 'ASC' },
+    });
+  }
+
+  async createTemplate(data: DeepPartial<LancamentoTemplate>) {
+    const template = this.templateRepo.create(data);
+    return this.templateRepo.save(template);
+  }
+
+  async duplicateFromPreviousMonth(
+    nucleoId: string,
+    referenceYear: number,
+    referenceMonth: number,
+    targetYear: number,
+    targetMonth: number,
+    createdById: string,
+  ) {
+    const referenceStart = new Date(referenceYear, referenceMonth - 1, 1);
+    const referenceEnd = new Date(referenceYear, referenceMonth, 0, 23, 59, 59);
+    const targetDate = new Date(targetYear, targetMonth - 1, 1);
+
+    const source = await this.repo.find({
+      where: {
+        nucleo: { id: nucleoId },
+        data_movimento: Between(referenceStart, referenceEnd),
+      },
+      order: { data_movimento: 'ASC' },
+    });
+
+    let created = 0;
+    const errors: Array<{ sourceId: string; mensagem: string }> = [];
+
+    for (const item of source) {
+      try {
+        await this.create({
+          tipo: item.tipo,
+          descricao: item.descricao,
+          valor: Number(item.valor),
+          categoria: item.categoria,
+          subcategoria: item.subcategoria,
+          observacao: item.observacao,
+          status: item.tipo === 'DESPESA' ? 'RASCUNHO' : 'REGISTRADO',
+          data_movimento: targetDate,
+          nucleoId,
+          caixaId: item.caixaId,
+          criadoPorId: createdById,
+        });
+        created += 1;
+      } catch (error) {
+        errors.push({
+          sourceId: item.id,
+          mensagem: error instanceof Error ? error.message : 'Erro ao duplicar',
+        });
+      }
+    }
+
+    return {
+      sourceCount: source.length,
+      created,
+      errors,
+    };
   }
 }

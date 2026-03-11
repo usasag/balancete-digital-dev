@@ -94,6 +94,14 @@ export default function MensalidadeDashboard() {
   const [agreementDialog, setAgreementDialog] = useState<Mensalidade | null>(
     null,
   );
+  const [selectedMensalidades, setSelectedMensalidades] = useState<string[]>([]);
+  const [bulkPayDate, setBulkPayDate] = useState<string>(
+    new Date().toISOString().split("T")[0],
+  );
+  const [generatingReference, setGeneratingReference] = useState(false);
+  const [referenceMonth, setReferenceMonth] = useState<string>(
+    new Date().toISOString().slice(0, 7),
+  );
 
   useEffect(() => {
     // Reset date when dialogs close/open
@@ -240,6 +248,52 @@ export default function MensalidadeDashboard() {
     }
   };
 
+  const toggleMensalidadeSelection = (id: string, checked: boolean) => {
+    setSelectedMensalidades((prev) =>
+      checked ? [...prev, id] : prev.filter((v) => v !== id),
+    );
+  };
+
+  const handleBulkPay = async () => {
+    if (selectedMensalidades.length === 0) return;
+    try {
+      const result = await mensalidadeService.payBulk(
+        selectedMensalidades,
+        bulkPayDate ? new Date(bulkPayDate) : undefined,
+      );
+      alert(
+        `Baixa coletiva concluída. Pagas: ${result.paid}. Erros: ${result.errors.length}.`,
+      );
+      setSelectedMensalidades([]);
+      fetchMensalidades();
+    } catch (error) {
+      console.error(error);
+      alert("Erro ao executar baixa coletiva.");
+    }
+  };
+
+  const handleGenerateReference = async () => {
+    if (!user?.nucleoId || !referenceMonth) return;
+    const [year, month] = referenceMonth.split("-");
+    const mesReferencia = `${month}/${year}`;
+    setGeneratingReference(true);
+    try {
+      const result = await mensalidadeService.generateReference(
+        user.nucleoId,
+        mesReferencia,
+      );
+      alert(
+        `Geração concluída (${result.mesReferencia}). Criadas: ${result.created}. Já existentes: ${result.skipped}.`,
+      );
+      fetchMensalidades();
+    } catch (error) {
+      console.error(error);
+      alert("Erro ao gerar mensalidades para referência.");
+    } finally {
+      setGeneratingReference(false);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "PAGO":
@@ -277,6 +331,7 @@ export default function MensalidadeDashboard() {
             <TableHead>Status</TableHead>
             <TableHead className="text-right">Valor</TableHead>
             <TableHead>Dt Pagamento / Acordo</TableHead>
+            <TableHead>Evidência</TableHead>
             <TableHead className="text-right">Ações</TableHead>
           </TableRow>
         </TableHeader>
@@ -304,6 +359,20 @@ export default function MensalidadeDashboard() {
                   : item.data_acordo
                     ? `Acordo: ${new Date(item.data_acordo).toLocaleDateString("pt-BR")}`
                     : "-"}
+              </TableCell>
+              <TableCell>
+                {item.evidenciaWebViewLink ? (
+                  <a
+                    href={item.evidenciaWebViewLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs underline text-primary"
+                  >
+                    Ver evidência
+                  </a>
+                ) : (
+                  <span className="text-xs text-muted-foreground">-</span>
+                )}
               </TableCell>
               <TableCell className="text-right">
                 {showActions && (
@@ -396,7 +465,7 @@ export default function MensalidadeDashboard() {
           {!loading && data.length === 0 && (
             <TableRow>
               <TableCell
-                colSpan={5}
+                colSpan={7}
                 className="text-center h-24 text-muted-foreground"
               >
                 Nenhuma mensalidade encontrada.
@@ -453,27 +522,27 @@ export default function MensalidadeDashboard() {
 
   // Dynamic calculation for the 3rd card (Red/Warning card)
   let outstandingAmount = 0;
-  let outstandingLabel = "A Receber (Atrasos)";
-  let outstandingDesc = "Soma de itens ATRASADOS ou INADIMPLENTES";
+  let outstandingLabel = "A Receber";
+  let outstandingDesc = "Soma de itens a receber";
 
   if (statusFilter === "PENDENTE") {
     outstandingAmount = filteredMensalidades
       .filter((m) => m.status === "PENDENTE")
       .reduce((acc, m) => acc + Number(m.valor_total || m.valor), 0);
     outstandingLabel = "A Receber (Pendentes)";
-    outstandingDesc = "Soma de itens Pendentes";
+    outstandingDesc = "Soma de itens pendentes";
   } else if (statusFilter === "ATRASADO") {
     outstandingAmount = filteredMensalidades
       .filter((m) => m.status === "ATRASADO")
       .reduce((acc, m) => acc + Number(m.valor_total || m.valor), 0);
     outstandingLabel = "A Receber (Atrasos)";
-    outstandingDesc = "Soma de itens Atrasados";
+    outstandingDesc = "Soma de itens atrasados";
   } else if (statusFilter === "INADIMPLENTE") {
     outstandingAmount = filteredMensalidades
       .filter((m) => m.status === "INADIMPLENTE")
       .reduce((acc, m) => acc + Number(m.valor_total || m.valor), 0);
     outstandingLabel = "Inadimplência";
-    outstandingDesc = "Soma de itens Inadimplentes";
+    outstandingDesc = "Soma de itens inadimplentes";
   } else {
     // Default (Todos)
     outstandingAmount = filteredMensalidades
@@ -486,11 +555,26 @@ export default function MensalidadeDashboard() {
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold tracking-tight">Mensalidades</h1>
         {isAdmin && (
-          <Button asChild>
-            <Link href="/mensalidades/novo">
-              <Plus className="mr-2 h-4 w-4" /> Registrar Mensalidade
-            </Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild>
+              <Link href="/mensalidades/novo">
+                <Plus className="mr-2 h-4 w-4" /> Registrar Mensalidade
+              </Link>
+            </Button>
+            <Input
+              type="month"
+              value={referenceMonth}
+              onChange={(e) => setReferenceMonth(e.target.value)}
+              className="w-[180px]"
+            />
+            <Button
+              variant="outline"
+              onClick={handleGenerateReference}
+              disabled={generatingReference}
+            >
+              Gerar mensalidades do mês
+            </Button>
+          </div>
         )}
       </div>
 
@@ -560,6 +644,32 @@ export default function MensalidadeDashboard() {
                     </SelectContent>
                   </Select>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg font-medium">
+                  Baixa coletiva
+                </CardTitle>
+                <CardDescription>
+                  Selecione mensalidades pendentes/atrasadas na tabela e confirme
+                  pagamento em massa.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-wrap items-center gap-3">
+                <Input
+                  type="date"
+                  value={bulkPayDate}
+                  onChange={(e) => setBulkPayDate(e.target.value)}
+                  className="w-[180px]"
+                />
+                <Button
+                  onClick={handleBulkPay}
+                  disabled={selectedMensalidades.length === 0}
+                >
+                  Confirmar baixa ({selectedMensalidades.length})
+                </Button>
               </CardContent>
             </Card>
 
@@ -634,10 +744,177 @@ export default function MensalidadeDashboard() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <MensalidadeTable
-                  data={filteredMensalidades}
-                  showActions={true}
-                />
+                <div className="rounded-md border overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-12">Sel.</TableHead>
+                        <TableHead>Sócio</TableHead>
+                        <TableHead>Mês Ref</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Valor</TableHead>
+                        <TableHead>Dt Pagamento / Acordo</TableHead>
+                        <TableHead>Evidência</TableHead>
+                        <TableHead className="text-right">Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredMensalidades.map((item) => {
+                        const selectable = ["PENDENTE", "ATRASADO"].includes(
+                          item.status,
+                        );
+                        const checked = selectedMensalidades.includes(item.id);
+                        return (
+                          <TableRow key={item.id}>
+                            <TableCell>
+                              <Input
+                                type="checkbox"
+                                disabled={!selectable}
+                                checked={checked}
+                                onChange={(e) =>
+                                  toggleMensalidadeSelection(
+                                    item.id,
+                                    e.target.checked,
+                                  )
+                                }
+                              />
+                            </TableCell>
+                            <TableCell className="font-medium">
+                              {item.socio?.nomeCompleto || "Sócio Removido"}
+                            </TableCell>
+                            <TableCell>{item.mes_referencia}</TableCell>
+                            <TableCell>
+                              <Badge
+                                variant="outline"
+                                className={getStatusColor(item.status)}
+                              >
+                                {item.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {formatCurrency(item.valor_total || item.valor)}
+                            </TableCell>
+                            <TableCell>
+                              {item.data_pagamento
+                                ? new Date(item.data_pagamento).toLocaleDateString(
+                                    "pt-BR",
+                                  )
+                                : item.data_acordo
+                                  ? `Acordo: ${new Date(item.data_acordo).toLocaleDateString("pt-BR")}`
+                                  : "-"}
+                            </TableCell>
+                            <TableCell>
+                              {item.evidenciaWebViewLink ? (
+                                <a
+                                  href={item.evidenciaWebViewLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs underline text-primary"
+                                >
+                                  Ver evidência
+                                </a>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">
+                                  -
+                                </span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" className="h-8 w-8 p-0">
+                                    <span className="sr-only">Abrir menu</span>
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuLabel>Ações</DropdownMenuLabel>
+                                  <DropdownMenuItem
+                                    onClick={() =>
+                                      navigator.clipboard.writeText(item.id)
+                                    }
+                                  >
+                                    Copiar ID
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  {item.status !== "PAGO" && (
+                                    <>
+                                      <DropdownMenuItem
+                                        onClick={() => setSlipDialog(item)}
+                                      >
+                                        <FileText className="mr-2 h-4 w-4" /> Ver
+                                        Mensalidade
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => setPayPixDialog(item)}
+                                      >
+                                        <Check className="mr-2 h-4 w-4 text-green-600" />
+                                        Pagar com Pix
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => setPayMoneyDialog(item)}
+                                      >
+                                        <Check className="mr-2 h-4 w-4 text-green-600" />
+                                        Pagar em Dinheiro
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => setAgreementDialog(item)}
+                                      >
+                                        <FileText className="mr-2 h-4 w-4 text-blue-600" />
+                                        Registrar Acordo
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem
+                                        onClick={() => setBoletoDialog(item)}
+                                      >
+                                        <FileText className="mr-2 h-4 w-4" /> Gerar
+                                        Boleto (PDF)
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+                                  {item.status === "PAGO" && (
+                                    <>
+                                      <DropdownMenuItem
+                                        onClick={() => setSlipDialog(item)}
+                                      >
+                                        <FileText className="mr-2 h-4 w-4" /> Ver
+                                        Comprovante
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => setBoletoDialog(item)}
+                                      >
+                                        <FileText className="mr-2 h-4 w-4" /> Ver
+                                        Boleto (Pago)
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => handleDelete(item.id)}
+                                    className="text-red-600 focus:text-red-600"
+                                  >
+                                    <Trash2 className="mr-2 h-4 w-4" /> Excluir
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      {!loading && filteredMensalidades.length === 0 && (
+                        <TableRow>
+                          <TableCell
+                            colSpan={8}
+                            className="text-center h-24 text-muted-foreground"
+                          >
+                            Nenhuma mensalidade encontrada.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

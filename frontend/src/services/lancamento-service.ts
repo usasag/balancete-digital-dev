@@ -18,6 +18,9 @@ export interface Lancamento {
   };
   status?: "RASCUNHO" | "REGISTRADO";
   comprovante_url?: string;
+  evidenciaDriveFileId?: string;
+  evidenciaDriveFolderId?: string;
+  evidenciaWebViewLink?: string;
 }
 
 export interface CreateLancamentoDto {
@@ -32,6 +35,59 @@ export interface CreateLancamentoDto {
   criadoPorId: string;
   status?: "RASCUNHO" | "REGISTRADO";
   caixaId?: string;
+}
+
+export interface ImportPreviewError {
+  linha: number;
+  mensagem: string;
+}
+
+export interface ImportPreviewRow {
+  linha: number;
+  tipo: "RECEITA" | "DESPESA";
+  descricao: string;
+  valor: number;
+  categoria: string;
+  data_movimento: string;
+  status?: "RASCUNHO" | "REGISTRADO";
+}
+
+export interface ImportPreviewResult {
+  validRows: ImportPreviewRow[];
+  errors: ImportPreviewError[];
+}
+
+export interface ImportExecuteResult {
+  created: number;
+  errors: ImportPreviewError[];
+}
+
+export interface LancamentoImportLog {
+  id: string;
+  arquivoNome: string;
+  totalLinhas: number;
+  linhasValidas: number;
+  linhasCriadas: number;
+  linhasComErro: number;
+  erros: ImportPreviewError[] | null;
+  dataCriacao: string;
+  usuario?: {
+    id: string;
+    nomeCompleto?: string;
+    email?: string;
+  };
+}
+
+export interface LancamentoTemplate {
+  id: string;
+  nome: string;
+  tipo: "RECEITA" | "DESPESA";
+  categoria: string;
+  subcategoria?: string | null;
+  descricao: string;
+  observacao?: string | null;
+  valor: number;
+  caixaId?: string | null;
 }
 
 export const lancamentoService = {
@@ -77,6 +133,102 @@ export const lancamentoService = {
 
   remove: async (id: string) => {
     await api.delete(`/lancamentos/${id}`);
+  },
+
+  importPreview: async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await api.post<ImportPreviewResult>(
+      "/lancamentos/import/preview",
+      formData,
+      {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      },
+    );
+    return response.data;
+  },
+
+  importExecute: async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await api.post<ImportExecuteResult>(
+      "/lancamentos/import/execute",
+      formData,
+      {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      },
+    );
+    return response.data;
+  },
+
+  vincularEvidenciaReceitas: async (payload: {
+    caixaId: string;
+    dataInicio: string;
+    dataFim: string;
+    comprovante_url: string;
+  }) => {
+    const response = await api.post<{ updated: number; message: string }>(
+      "/lancamentos/receitas/evidencia-compartilhada",
+      payload,
+    );
+    return response.data;
+  },
+
+  getImportLogs: async () => {
+    const response = await api.get<LancamentoImportLog[]>(
+      "/lancamentos/import/logs",
+    );
+    return response.data;
+  },
+
+  getTemplatesByNucleo: async (nucleoId: string) => {
+    const response = await api.get<LancamentoTemplate[]>(
+      `/lancamentos/templates/nucleo/${nucleoId}`,
+    );
+    return response.data;
+  },
+
+  getDriveEvidenceStatus: async () => {
+    const response = await api.get<{
+      provider: "LOCAL_TEST" | "GOOGLE_DRIVE_PENDING";
+      driveConfigured: boolean;
+    }>("/lancamentos/evidencia/drive-status");
+    return response.data;
+  },
+
+  createTemplate: async (payload: {
+    nome: string;
+    tipo: "RECEITA" | "DESPESA";
+    categoria: string;
+    subcategoria?: string;
+    descricao: string;
+    observacao?: string;
+    valor: number;
+    caixaId?: string;
+  }) => {
+    const response = await api.post<LancamentoTemplate>(
+      "/lancamentos/templates",
+      payload,
+    );
+    return response.data;
+  },
+
+  duplicatePreviousMonth: async (payload: {
+    referenceYear: number;
+    referenceMonth: number;
+    targetYear: number;
+    targetMonth: number;
+  }) => {
+    const response = await api.post<{
+      sourceCount: number;
+      created: number;
+      errors: Array<{ sourceId: string; mensagem: string }>;
+    }>("/lancamentos/duplicate-previous-month", payload);
+    return response.data;
   },
 
   /**

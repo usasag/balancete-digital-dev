@@ -41,6 +41,9 @@ export interface Mensalidade {
   data_pagamento?: string;
   data_acordo?: string;
   criadoPorId?: string;
+  evidenciaDriveFileId?: string;
+  evidenciaDriveFolderId?: string;
+  evidenciaWebViewLink?: string;
 }
 
 export interface CreateMensalidadeDto {
@@ -83,6 +86,30 @@ export const mensalidadeService = {
       `/mensalidades/${id}/pay`,
       date ? { date: date.toISOString() } : {},
     );
+    return response.data;
+  },
+
+  payBulk: async (ids: string[], date?: Date) => {
+    const response = await api.post<{
+      paid: number;
+      errors: Array<{ id: string; mensagem: string }>;
+    }>(`/mensalidades/bulk/pay`, {
+      ids,
+      date: date ? date.toISOString() : undefined,
+    });
+    return response.data;
+  },
+
+  generateReference: async (nucleoId: string, mesReferencia: string) => {
+    const response = await api.post<{
+      created: number;
+      skipped: number;
+      totalUsers: number;
+      mesReferencia: string;
+    }>(`/mensalidades/generate-reference`, {
+      nucleoId,
+      mesReferencia,
+    });
     return response.data;
   },
 

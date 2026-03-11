@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { google, drive_v3 } from 'googleapis';
+import { Readable } from 'stream';
 
 /**
  * FileStorageService - Handles file uploads.
@@ -19,6 +21,10 @@ export class FileStorageService {
   private readonly logger = new Logger(FileStorageService.name);
   private readonly testMode: boolean;
   private readonly uploadDir: string;
+  private readonly driveRootFolderId: string;
+  private readonly driveClient: drive_v3.Drive | null;
+  private readonly driveEnabled: boolean;
+  private readonly folderCache = new Map<string, string>();
 
   constructor(private configService: ConfigService) {
     this.testMode =
@@ -28,18 +34,57 @@ export class FileStorageService {
       'LOCAL_UPLOAD_DIR',
       './uploads',
     );
+    this.driveRootFolderId =
+      this.configService.get<string>('GOOGLE_DRIVE_ROOT_FOLDER_ID') || 'root';
+    this.driveClient = this.createDriveClient();
+    this.driveEnabled = !this.testMode && this.driveClient !== null;
 
-    if (this.testMode) {
+    if (this.testMode || !this.driveEnabled) {
       this.logger.log(
         'FileStorageService running in TEST MODE (local storage)',
       );
       this.ensureUploadDir();
     } else {
-      // TODO: Initialize Google Drive client here when ready
-      this.logger.log(
-        'FileStorageService configured for Google Drive (not yet implemented)',
-      );
-      this.ensureUploadDir(); // Fallback to local
+      this.logger.log('FileStorageService configured for Google Drive');
+    }
+  }
+
+  isDriveConfigured(): boolean {
+    return this.driveEnabled;
+  }
+
+  getProviderName(): 'LOCAL_TEST' | 'GOOGLE_DRIVE' {
+    return this.driveEnabled ? 'GOOGLE_DRIVE' : 'LOCAL_TEST';
+  }
+
+  private createDriveClient(): drive_v3.Drive | null {
+    const serviceAccountRaw = this.configService.get<string>(
+      'GOOGLE_SERVICE_ACCOUNT_JSON',
+    );
+
+    if (!serviceAccountRaw) {
+      if (!this.testMode) {
+        this.logger.warn('GOOGLE_SERVICE_ACCOUNT_JSON não configurado.');
+      }
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(serviceAccountRaw) as {
+        client_email: string;
+        private_key: string;
+      };
+
+      const auth = new google.auth.JWT({
+        email: parsed.client_email,
+        key: parsed.private_key?.replace(/\\n/g, '\n'),
+        scopes: ['https://www.googleapis.com/auth/drive.file'],
+      });
+
+      return google.drive({ version: 'v3', auth });
+    } catch (error) {
+      this.logger.error('Falha ao carregar credencial do Google Drive.', error);
+      return null;
     }
   }
 
@@ -54,22 +99,164 @@ export class FileStorageService {
   /**
    * Upload a file. Returns the URL/path to access the file.
    */
-  uploadFile(
+  async uploadFileWithMetadata(
     buffer: Buffer,
     originalFilename: string,
     mimeType: string,
     nucleoId: string,
-  ): string {
-    const ext = path.extname(originalFilename) || this.getExtFromMime(mimeType);
-    const filename = `${uuidv4()}${ext}`;
+    options?: {
+      tipo?: 'RECEITA' | 'DESPESA';
+      dataMovimento?: Date;
+      domain?: 'lancamento' | 'mensalidade';
+    },
+  ): Promise<{
+    url: string;
+    driveFileId: string | null;
+    driveFolderId: string | null;
+    webViewLink: string | null;
+  }> {
+    const filename = this.buildStandardizedFilename(
+      originalFilename,
+      mimeType,
+      nucleoId,
+      options,
+    );
 
-    if (this.testMode) {
-      return this.uploadLocal(buffer, filename, nucleoId);
-    } else {
-      // TODO: When Google Drive is configured, call uploadToDrive here
-      // For now, fallback to local
-      return this.uploadLocal(buffer, filename, nucleoId);
+    if (!this.driveEnabled || !this.driveClient) {
+      return {
+        url: this.uploadLocal(buffer, filename, nucleoId),
+        driveFileId: null,
+        driveFolderId: null,
+        webViewLink: null,
+      };
     }
+
+    return this.uploadToDrive(
+      buffer,
+      originalFilename,
+      mimeType,
+      nucleoId,
+      options,
+    );
+  }
+
+  private async uploadToDrive(
+    buffer: Buffer,
+    originalFilename: string,
+    mimeType: string,
+    nucleoId: string,
+    options?: {
+      tipo?: 'RECEITA' | 'DESPESA';
+      dataMovimento?: Date;
+      domain?: 'lancamento' | 'mensalidade';
+    },
+  ) {
+    if (!this.driveClient) {
+      throw new Error('Google Drive client indisponível.');
+    }
+
+    const movementDate = options?.dataMovimento || new Date();
+    const yyyy = String(movementDate.getFullYear());
+    const mm = String(movementDate.getMonth() + 1).padStart(2, '0');
+    const tipo = options?.tipo || 'DESPESA';
+    const domain = options?.domain || 'lancamento';
+    const folderPath = [
+      `Nucleo-${nucleoId}`,
+      yyyy,
+      mm,
+      domain,
+      tipo,
+    ];
+    const filename = this.buildStandardizedFilename(
+      originalFilename,
+      mimeType,
+      nucleoId,
+      options,
+    );
+
+    const folderId = await this.ensureDriveFolderPath(folderPath);
+    const uploaded = await this.driveClient.files.create({
+      requestBody: {
+        name: filename,
+        parents: [folderId],
+      },
+      media: {
+        mimeType,
+        body: Readable.from(buffer),
+      },
+      fields: 'id, webViewLink',
+    });
+
+    const driveFileId = uploaded.data.id || null;
+    const webViewLink = uploaded.data.webViewLink || null;
+
+    return {
+      url: webViewLink || `https://drive.google.com/file/d/${driveFileId}/view`,
+      driveFileId,
+      driveFolderId: folderId,
+      webViewLink,
+    };
+  }
+
+  private async ensureDriveFolderPath(pathParts: string[]): Promise<string> {
+    let currentParent = this.driveRootFolderId;
+
+    for (const part of pathParts) {
+      const cacheKey = `${currentParent}/${part}`;
+      const cached = this.folderCache.get(cacheKey);
+      if (cached) {
+        currentParent = cached;
+        continue;
+      }
+
+      const existingId = await this.findFolderByName(part, currentParent);
+      if (existingId) {
+        this.folderCache.set(cacheKey, existingId);
+        currentParent = existingId;
+        continue;
+      }
+
+      const created = await this.driveClient!.files.create({
+        requestBody: {
+          name: part,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [currentParent],
+        },
+        fields: 'id',
+      });
+
+      const folderId = created.data.id;
+      if (!folderId) {
+        throw new Error(`Falha ao criar pasta ${part} no Google Drive.`);
+      }
+      this.folderCache.set(cacheKey, folderId);
+      currentParent = folderId;
+    }
+
+    return currentParent;
+  }
+
+  private async findFolderByName(
+    name: string,
+    parentId: string,
+  ): Promise<string | null> {
+    if (!this.driveClient) return null;
+
+    const escapedName = name.replace(/'/g, "\\'");
+    const query = [
+      `name = '${escapedName}'`,
+      `'${parentId}' in parents`,
+      `mimeType = 'application/vnd.google-apps.folder'`,
+      'trashed = false',
+    ].join(' and ');
+
+    const result = await this.driveClient.files.list({
+      q: query,
+      fields: 'files(id,name)',
+      pageSize: 1,
+    });
+
+    return result.data.files?.[0]?.id || null;
   }
 
   private uploadLocal(
@@ -100,6 +287,29 @@ export class FileStorageService {
       'application/pdf': '.pdf',
     };
     return map[mimeType] || '.bin';
+  }
+
+  private buildStandardizedFilename(
+    originalFilename: string,
+    mimeType: string,
+    nucleoId: string,
+    options?: {
+      tipo?: 'RECEITA' | 'DESPESA';
+      dataMovimento?: Date;
+      domain?: 'lancamento' | 'mensalidade';
+    },
+  ): string {
+    const ext = path.extname(originalFilename) || this.getExtFromMime(mimeType);
+    const movementDate = options?.dataMovimento || new Date();
+    const yyyy = String(movementDate.getFullYear());
+    const mm = String(movementDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(movementDate.getDate()).padStart(2, '0');
+    const tipo = (options?.tipo || 'DESPESA').toLowerCase();
+    const domain = (options?.domain || 'lancamento').toLowerCase();
+    const safeNucleo = nucleoId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const unique = uuidv4();
+
+    return `${domain}_${tipo}_${safeNucleo}_${yyyy}${mm}${dd}_${unique}${ext}`;
   }
 
   /**
