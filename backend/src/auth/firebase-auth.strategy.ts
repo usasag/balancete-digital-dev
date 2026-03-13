@@ -28,30 +28,22 @@ export class FirebaseAuthStrategy extends PassportStrategy(
     }
   }
 
-  async validate(token: string | FirebaseUserPayload) {
-    // Check if token is the decoded object or the raw string.
-    // Different versions of passport-firebase-jwt behave differently.
-    // If it's a raw string, we verify it. If it's an object, it might be unverified but let's check.
+  async validate(token: string) {
+    if (typeof token !== 'string') {
+      throw new UnauthorizedException('Formato de token inválido.');
+    }
 
-    let firebaseUser: admin.auth.DecodedIdToken | FirebaseUserPayload;
+    let firebaseUser: admin.auth.DecodedIdToken;
 
-    // If the library returns the raw token string (common behavior in some configs)
-    if (typeof token === 'string') {
-      try {
-        firebaseUser = await admin.auth().verifyIdToken(token);
-      } catch (error) {
-        console.error('Firebase Token Verification Failed:', error);
-        throw new UnauthorizedException('Token inválido ou expirado.');
-      }
-    } else {
-      // If it is already an object, assume it's the payload (but this is risky without admin signature check)
-      // Ideally we want the RAW string to verify signature.
-      // For now, let's treat 'token' as the payload if it is an object.
-      firebaseUser = token;
+    try {
+      firebaseUser = await admin.auth().verifyIdToken(token);
+    } catch (error) {
+      console.error('Firebase Token Verification Failed:', error);
+      throw new UnauthorizedException('Token inválido ou expirado.');
     }
 
     // Safety check
-    if (!firebaseUser || (!firebaseUser.uid && !firebaseUser.user_id)) {
+    if (!firebaseUser || !firebaseUser.uid) {
       throw new UnauthorizedException('Token inválido: UID não encontrado.');
     }
 
