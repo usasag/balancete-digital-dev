@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DeepPartial } from 'typeorm';
@@ -16,6 +17,8 @@ import { CreateBalanceteDto } from './dto/create-balancete.dto';
 
 @Injectable()
 export class BalanceteService {
+  private readonly logger = new Logger(BalanceteService.name);
+
   constructor(
     @InjectRepository(BalanceteMensal)
     private balanceteRepository: Repository<BalanceteMensal>,
@@ -146,7 +149,6 @@ export class BalanceteService {
     status: 'APROVADO' | 'REPROVADO',
     ressalva?: string,
   ): Promise<BalanceteMensal> {
-    console.error('DEBUG: Approve Start', id, user.role);
     const balancete = await this.findOne(id);
 
     // Validar se pode aprovar
@@ -166,8 +168,7 @@ export class BalanceteService {
       ressalva,
     } as DeepPartial<BalanceteAprovacao>);
 
-    const saved = await this.aprovacaoRepository.save(aprovacao);
-    console.error('DEBUG: Aprovacao Saved', saved.id, saved.role_aprovador);
+    await this.aprovacaoRepository.save(aprovacao);
 
     // Lógica da State Machine
     const allApprovals = await this.aprovacaoRepository.find({
@@ -189,7 +190,6 @@ export class BalanceteService {
     );
 
     if (tesourariaApproved && conselhoApproved) {
-      console.error('DEBUG: TRANSITIONING TO APROVADO');
       await this.balanceteRepository.update(id, {
         status: BalanceteStatus.APROVADO,
       });
@@ -198,7 +198,6 @@ export class BalanceteService {
       balancete.status === BalanceteStatus.RASCUNHO &&
       (tesourariaApproved || conselhoApproved)
     ) {
-      console.error('DEBUG: TRANSITIONING TO EM_APROVACAO');
       await this.balanceteRepository.update(id, {
         status: BalanceteStatus.EM_APROVACAO,
       });
@@ -217,12 +216,12 @@ export class BalanceteService {
     });
 
     if (!balancete) {
-      console.log(`No balancete found for ${ano_mes} to update.`);
+      this.logger.log(`No balancete found for ${ano_mes} to update.`);
       return;
     }
 
     if (balancete.status === BalanceteStatus.PUBLICADO) {
-      console.warn(
+      this.logger.warn(
         `Cannot update totals for published balancete: ${balancete.id}`,
       );
       return;
@@ -260,7 +259,7 @@ export class BalanceteService {
       saldo_final,
     });
 
-    console.log(
+    this.logger.log(
       `Updated Balancete ${ano_mes}: Receitas=${total_receitas}, Despesas=${total_despesas}, Final=${saldo_final}`,
     );
 
@@ -273,10 +272,10 @@ export class BalanceteService {
 
     if (nextBalancete) {
       if (nextBalancete.status === BalanceteStatus.PUBLICADO) {
-        console.warn('Next balancete is published, stopping recursion.');
+        this.logger.warn('Next balancete is published, stopping recursion.');
         return;
       }
-      console.log(`Propagating balance to next month: ${nextAnoMes}`);
+      this.logger.log(`Propagating balance to next month: ${nextAnoMes}`);
       await this.balanceteRepository.update(nextBalancete.id, {
         saldo_inicial: saldo_final,
       });
