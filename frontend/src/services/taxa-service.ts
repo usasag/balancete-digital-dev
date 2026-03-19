@@ -22,6 +22,10 @@ export interface ConfiguracaoFinanceira {
   caixaDgId?: string;
   caixaRegiaoId?: string;
   caixaNucleoId?: string;
+  politicaReciboSemNotaAtiva?: boolean;
+  politicaReciboLimiteSalariosMinimos?: number;
+  politicaAprovacaoDuplaAtiva?: boolean;
+  politicaAprovacaoDuplaLimite?: number;
 }
 
 export interface CreateTaxaDto {

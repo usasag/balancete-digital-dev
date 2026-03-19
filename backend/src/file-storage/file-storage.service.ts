@@ -57,6 +57,87 @@ export class FileStorageService {
     return this.driveEnabled ? 'GOOGLE_DRIVE' : 'LOCAL_TEST';
   }
 
+  async checkEvidenceReference(params: {
+    driveFileId?: string | null;
+    url?: string | null;
+  }): Promise<{
+    status: 'HEALTHY' | 'BROKEN' | 'MISSING' | 'UNKNOWN';
+    message: string;
+  }> {
+    const driveFileId = params.driveFileId || this.extractDriveFileId(params.url);
+    const url = params.url || '';
+
+    if (!driveFileId && !url) {
+      return {
+        status: 'MISSING',
+        message: 'Registro sem evidência vinculada.',
+      };
+    }
+
+    if (driveFileId) {
+      if (!this.driveEnabled || !this.driveClient) {
+        return {
+          status: 'UNKNOWN',
+          message: 'Provider em modo local; validação no Drive indisponível.',
+        };
+      }
+
+      try {
+        const result = await this.driveClient.files.get({
+          fileId: driveFileId,
+          fields: 'id,trashed',
+        });
+
+        if (!result.data.id || result.data.trashed) {
+          return {
+            status: 'BROKEN',
+            message: 'Arquivo removido ou enviado para lixeira no Drive.',
+          };
+        }
+
+        return {
+          status: 'HEALTHY',
+          message: 'Arquivo de evidência disponível.',
+        };
+      } catch {
+        return {
+          status: 'BROKEN',
+          message: 'Arquivo não encontrado no Drive ou sem acesso.',
+        };
+      }
+    }
+
+    if (url.startsWith('/uploads/')) {
+      const filePath = path.resolve('.', url);
+      const exists = fs.existsSync(filePath);
+      return exists
+        ? {
+            status: 'HEALTHY',
+            message: 'Arquivo local de evidência disponível.',
+          }
+        : {
+            status: 'BROKEN',
+            message: 'Arquivo local não encontrado.',
+          };
+    }
+
+    return {
+      status: 'UNKNOWN',
+      message: 'Evidência externa sem validação automática.',
+    };
+  }
+
+  private extractDriveFileId(url?: string | null): string | null {
+    if (!url) return null;
+    const directMatch = url.match(/\/d\/([^/]+)/);
+    if (directMatch?.[1]) return directMatch[1];
+
+    const idParamMatch = url.match(/[?&]id=([^&]+)/);
+    if (idParamMatch?.[1]) return idParamMatch[1];
+
+    return null;
+  }
+
   private createDriveClient(): drive_v3.Drive | null {
     const serviceAccountRaw = this.configService.get<string>(
       'GOOGLE_SERVICE_ACCOUNT_JSON',

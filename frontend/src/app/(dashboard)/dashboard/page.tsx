@@ -1,10 +1,34 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { periodoService, DashboardAlert } from "@/services/periodo-service";
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const [alerts, setAlerts] = useState<DashboardAlert[]>([]);
+
+  useEffect(() => {
+    const fetchAlerts = async () => {
+      if (!user?.nucleoId) return;
+      try {
+        const response = await periodoService.getAlertas(user.nucleoId);
+        setAlerts(response.alertas || []);
+      } catch {
+        toast.error("Não foi possível carregar os alertas do dashboard.");
+      }
+    };
+
+    fetchAlerts();
+  }, [user?.nucleoId]);
+
+  const alertColor = (severity: DashboardAlert["severity"]) => {
+    if (severity === "critical") return "border-red-300 bg-red-50";
+    if (severity === "warning") return "border-amber-300 bg-amber-50";
+    return "border-blue-300 bg-blue-50";
+  };
 
   return (
     <div className="space-y-6">
@@ -46,6 +70,31 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Alertas Automáticos</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {alerts.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nenhum alerta ativo no momento.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {alerts.map((alert) => (
+                <div
+                  key={alert.code}
+                  className={`rounded-md border p-3 ${alertColor(alert.severity)}`}
+                >
+                  <p className="font-semibold text-sm">{alert.title}</p>
+                  <p className="text-sm text-muted-foreground">{alert.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

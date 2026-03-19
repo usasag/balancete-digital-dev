@@ -14,6 +14,10 @@ import { PeriodoService } from '../periodo/periodo.service';
 import { Between } from 'typeorm';
 import { LancamentoImportLog } from './lancamento-import-log.entity';
 import { LancamentoTemplate } from './lancamento-template.entity';
+import { EvidenciaMigracaoLog } from './evidencia-migracao-log.entity';
+import { EvidenciaAuditoriaLog } from './evidencia-auditoria-log.entity';
+import { ConfiguracaoService } from '../configuracao/configuracao.service';
+import { SalarioMinimoService } from '../salario-minimo/salario-minimo.service';
 
 export interface ImportLancamentoRow {
   linha: number;
@@ -25,13 +29,22 @@ export interface ImportLancamentoRow {
   observacao?: string;
   data_movimento: Date;
   caixaId?: string;
+  contaBancariaId?: string;
   status?: 'RASCUNHO' | 'REGISTRADO';
   comprovante_url?: string;
+  tipoComprovante?: 'NOTA_FISCAL' | 'RECIBO';
 }
 
 export interface ImportLancamentoError {
   linha: number;
   mensagem: string;
+}
+
+export interface EvidenceMigrationRow {
+  linha: number;
+  entidade: 'LANCAMENTO' | 'MENSALIDADE';
+  id: string;
+  url: string;
 }
 
 @Injectable()
@@ -43,13 +56,61 @@ export class LancamentoService {
     private importLogRepo: Repository<LancamentoImportLog>,
     @InjectRepository(LancamentoTemplate)
     private templateRepo: Repository<LancamentoTemplate>,
+    @InjectRepository(EvidenciaMigracaoLog)
+    private evidenceMigrationLogRepo: Repository<EvidenciaMigracaoLog>,
+    @InjectRepository(EvidenciaAuditoriaLog)
+    private evidenceAuditLogRepo: Repository<EvidenciaAuditoriaLog>,
     @Inject(forwardRef(() => BalanceteService))
     private balanceteService: BalanceteService,
     @Inject(forwardRef(() => CaixaService))
     private caixaService: CaixaService,
     @Inject(forwardRef(() => PeriodoService))
     private periodoService: PeriodoService,
+    private configuracaoService: ConfiguracaoService,
+    private salarioMinimoService: SalarioMinimoService,
   ) {}
+
+  private async enforceEvidencePolicy(
+    data: DeepPartial<LancamentoFinanceiro>,
+    original?: LancamentoFinanceiro,
+  ): Promise<void> {
+    const tipo = (data.tipo || original?.tipo || '') as string;
+    const status = (data.status || original?.status || '') as string;
+    const valor = Number(data.valor ?? original?.valor ?? 0);
+    const nucleoId = (data.nucleoId || original?.nucleoId || '') as string;
+    const dataMovimento =
+      (data.data_movimento as Date | undefined) || original?.data_movimento;
+
+    if (tipo !== 'DESPESA' || status !== 'REGISTRADO') return;
+
+    const comprovanteUrl =
+      data.comprovante_url !== undefined
+        ? data.comprovante_url
+        : original?.comprovante_url;
+    if (!comprovanteUrl) {
+      data.status = 'RASCUNHO';
+      return;
+    }
+
+    const tipoComprovante =
+      (data.tipoComprovante as string | undefined) || original?.tipoComprovante;
+
+    if (tipoComprovante !== 'RECIBO') return;
+    if (!nucleoId || !dataMovimento) return;
+
+    const config = await this.configuracaoService.findOneByNucleo(nucleoId);
+    if (!config.politicaReciboSemNotaAtiva) return;
+
+    const salarioMinimo = await this.salarioMinimoService.getByDate(
+      new Date(dataMovimento),
+    );
+    const limite =
+      Number(config.politicaReciboLimiteSalariosMinimos || 1) * salarioMinimo;
+
+    if (valor > limite) {
+      data.status = 'RASCUNHO';
+    }
+  }
 
   async findAllByMesAno(
     nucleoId: string,
@@ -93,11 +154,19 @@ export class LancamentoService {
   async create(
     data: DeepPartial<LancamentoFinanceiro>,
   ): Promise<LancamentoFinanceiro> {
+    const nucleoObj = data.nucleo as { id: string } | undefined;
+    const nucleoId = nucleoObj?.id || data.nucleoId;
+
+    if (nucleoId && data.data_movimento) {
+      await this.periodoService.checkPermissao(
+        data.data_movimento as Date,
+        nucleoId,
+      );
+    }
+
     // If no caixa provided, use default (Tesouraria)
     if (!data.caixa && !data.caixaId && data.nucleo) {
       // assuming data.nucleo or data.nucleoId is present
-      const nucleoObj = data.nucleo as { id: string } | undefined;
-      const nucleoId = nucleoObj?.id || data.nucleoId;
       if (typeof nucleoId === 'string') {
         const defaultCaixa = await this.caixaService.findDefault(nucleoId);
         if (defaultCaixa) {
@@ -106,26 +175,13 @@ export class LancamentoService {
       }
     }
 
-    // Validation for DESPESA and REGISTRADO status
     if (data.tipo === 'DESPESA') {
-      if (data.status === 'REGISTRADO') {
-        if (!data.comprovante_url) {
-          // If user tries to force REGISTRADO without proof, we can either throw error or downgrade to RASCUNHO.
-          // Requirement: "Enforcing a rule that an expense entry can only be changed to 'Registrado' status when all mandatory fields... are complete."
-          // I will throw an error to be explicit, or just set it to RASCUNHO?
-          // "Automatically setting the status to 'Rascunho' ... if a fiscal evidence is not provided."
-          data.status = 'RASCUNHO';
-        }
-      } else {
-        // Explicitly set to RASCUNHO if not specified, or if it is RASCUNHO
-        if (!data.status) data.status = 'RASCUNHO';
-      }
+      if (!data.status) data.status = 'RASCUNHO';
     } else if (data.tipo === 'RECEITA') {
-      // Receitas presumably default to REGISTRADO or RASCUNHO?
-      // User didn't specify strict flow for Receita validation yet, but mentioned "single bank statement... for multiple revenue transactions".
-      // For now, let's allow Receita to be REGISTRADO by default if not specified, or respect input.
       if (!data.status) data.status = 'REGISTRADO';
     }
+
+    await this.enforceEvidencePolicy(data);
 
     const lancamento = this.repo.create(data);
     const saved = await this.repo.save(lancamento);
@@ -184,25 +240,7 @@ export class LancamentoService {
       );
     }
 
-    // Validation for DESPESA and REGISTRADO status during update
-    if (original.tipo === 'DESPESA' || data.tipo === 'DESPESA') {
-      const isDespesa =
-        data.tipo === 'DESPESA' || (original.tipo === 'DESPESA' && !data.tipo);
-      if (isDespesa) {
-        const newStatus = data.status || original.status;
-        const newComprovante =
-          data.comprovante_url !== undefined
-            ? data.comprovante_url
-            : original.comprovante_url;
-
-        if (newStatus === 'REGISTRADO') {
-          if (!newComprovante) {
-            // If trying to set/keep REGISTRADO without proof, force RASCUNHO
-            data.status = 'RASCUNHO';
-          }
-        }
-      }
-    }
+    await this.enforceEvidencePolicy(data, original);
 
     await this.repo.update(id, data);
     const updated = await this.findOne(id);
@@ -226,6 +264,27 @@ export class LancamentoService {
     }
 
     return updated;
+  }
+
+  async clearEvidence(id: string): Promise<LancamentoFinanceiro> {
+    const original = await this.findOne(id);
+
+    if (original.data_movimento && original.nucleoId) {
+      await this.periodoService.checkPermissao(
+        original.data_movimento,
+        original.nucleoId,
+      );
+    }
+
+    await this.repo.update(id, {
+      comprovante_url: null,
+      evidenciaDriveFileId: null,
+      evidenciaDriveFolderId: null,
+      evidenciaWebViewLink: null,
+      status: original.tipo === 'DESPESA' ? 'RASCUNHO' : original.status,
+    } as unknown as DeepPartial<LancamentoFinanceiro>);
+
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {
@@ -318,8 +377,14 @@ export class LancamentoService {
         observacao: String(raw.observacao || '').trim() || undefined,
         data_movimento: dataMovimento,
         caixaId: String(raw.caixaId || '').trim() || undefined,
+        contaBancariaId:
+          String(raw.contaBancariaId || '').trim() || undefined,
         status: statusNormalized,
         comprovante_url: String(raw.comprovante_url || '').trim() || undefined,
+        tipoComprovante:
+          String(raw.tipoComprovante || '').trim().toUpperCase() === 'RECIBO'
+            ? 'RECIBO'
+            : 'NOTA_FISCAL',
       });
     });
 
@@ -362,6 +427,128 @@ export class LancamentoService {
     return this.templateRepo.find({
       where: { nucleoId, ativo: true },
       order: { nome: 'ASC' },
+    });
+  }
+
+  parseEvidenceMigrationPreview(rawRows: Record<string, unknown>[]): {
+    validRows: EvidenceMigrationRow[];
+    errors: ImportLancamentoError[];
+  } {
+    const validRows: EvidenceMigrationRow[] = [];
+    const errors: ImportLancamentoError[] = [];
+
+    rawRows.forEach((raw, index) => {
+      const linha = index + 2;
+      const entidade = String(raw.entidade || '')
+        .trim()
+        .toUpperCase();
+      const id = String(raw.id || '').trim();
+      const url = String(raw.url || '').trim();
+
+      if (entidade !== 'LANCAMENTO' && entidade !== 'MENSALIDADE') {
+        errors.push({
+          linha,
+          mensagem: 'Entidade inválida. Use LANCAMENTO ou MENSALIDADE.',
+        });
+        return;
+      }
+
+      if (!id) {
+        errors.push({ linha, mensagem: 'ID é obrigatório.' });
+        return;
+      }
+
+      if (!url) {
+        errors.push({ linha, mensagem: 'URL é obrigatória.' });
+        return;
+      }
+
+      validRows.push({
+        linha,
+        entidade: entidade as 'LANCAMENTO' | 'MENSALIDADE',
+        id,
+        url,
+      });
+    });
+
+    return { validRows, errors };
+  }
+
+  async createEvidenceMigrationLog(data: {
+    nucleoId: string;
+    usuarioId: string;
+    arquivoNome: string;
+    totalLinhas: number;
+    linhasProcessadas: number;
+    linhasComErro: number;
+    erros: Array<{ linha: number; mensagem: string }>;
+  }): Promise<EvidenciaMigracaoLog> {
+    const log = this.evidenceMigrationLogRepo.create({
+      nucleoId: data.nucleoId,
+      usuarioId: data.usuarioId,
+      arquivoNome: data.arquivoNome,
+      totalLinhas: data.totalLinhas,
+      linhasProcessadas: data.linhasProcessadas,
+      linhasComErro: data.linhasComErro,
+      erros: data.erros.length > 0 ? data.erros : null,
+    });
+
+    return this.evidenceMigrationLogRepo.save(log);
+  }
+
+  async findEvidenceMigrationLogsByNucleo(
+    nucleoId: string,
+  ): Promise<EvidenciaMigracaoLog[]> {
+    return this.evidenceMigrationLogRepo.find({
+      where: { nucleoId },
+      relations: ['usuario'],
+      order: { dataCriacao: 'DESC' },
+    });
+  }
+
+  async createEvidenceAuditLog(data: {
+    entidade: 'LANCAMENTO' | 'MENSALIDADE';
+    entidadeId: string;
+    nucleoId: string;
+    usuarioId: string;
+    acao: 'ATTACH' | 'RELINK' | 'REMOVE' | 'MIGRATION_LINK';
+    anterior: {
+      comprovante_url?: string | null;
+      evidenciaDriveFileId?: string | null;
+      evidenciaWebViewLink?: string | null;
+    } | null;
+    novo: {
+      comprovante_url?: string | null;
+      evidenciaDriveFileId?: string | null;
+      evidenciaWebViewLink?: string | null;
+    } | null;
+  }): Promise<EvidenciaAuditoriaLog> {
+    const log = this.evidenceAuditLogRepo.create({
+      entidade: data.entidade,
+      entidadeId: data.entidadeId,
+      nucleoId: data.nucleoId,
+      usuarioId: data.usuarioId,
+      acao: data.acao,
+      anterior: data.anterior,
+      novo: data.novo,
+    });
+
+    return this.evidenceAuditLogRepo.save(log);
+  }
+
+  async findEvidenceAuditLogsByNucleo(
+    nucleoId: string,
+    entidade?: 'LANCAMENTO' | 'MENSALIDADE',
+    entidadeId?: string,
+  ): Promise<EvidenciaAuditoriaLog[]> {
+    return this.evidenceAuditLogRepo.find({
+      where: {
+        nucleoId,
+        ...(entidade ? { entidade } : {}),
+        ...(entidadeId ? { entidadeId } : {}),
+      },
+      relations: ['usuario'],
+      order: { dataCriacao: 'DESC' },
     });
   }
 

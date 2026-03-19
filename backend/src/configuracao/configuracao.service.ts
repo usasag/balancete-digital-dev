@@ -20,6 +20,10 @@ export class ConfiguracaoService {
         nucleoId,
         valor_repasse_dg: 24.57,
         valor_repasse_regiao: 12.0,
+        politicaReciboSemNotaAtiva: true,
+        politicaReciboLimiteSalariosMinimos: 1,
+        politicaAprovacaoDuplaAtiva: true,
+        politicaAprovacaoDuplaLimite: 5000,
       });
       return this.repo.save(config);
     }

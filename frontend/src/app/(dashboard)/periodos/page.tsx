@@ -62,6 +62,14 @@ export default function PeriodosPage() {
   const [periodoToReopen, setPeriodoToReopen] = useState<Periodo | null>(null);
   const [pendingMonth, setPendingMonth] = useState<number | null>(null);
   const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
+  const [checklistDialogOpen, setChecklistDialogOpen] = useState(false);
+  const [checklistMonth, setChecklistMonth] = useState<number | null>(null);
+  const [checklist, setChecklist] = useState<{
+    lancamentosRascunho: number;
+    mensalidadesPendentes: number;
+    totalPendenciasCriticas: number;
+    bloqueiaFechamento: boolean;
+  } | null>(null);
   const [justificativa, setJustificativa] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -115,6 +123,20 @@ export default function PeriodosPage() {
       return;
     try {
       setActionLoading(true);
+      const preChecklist = await periodoService.getChecklist(
+        mes,
+        selectedYear,
+        user.nucleoId,
+      );
+      if (preChecklist.bloqueiaFechamento) {
+        toast.error(
+          `Checklist bloqueia fechamento: ${preChecklist.lancamentosRascunho} rascunho(s) e ${preChecklist.mensalidadesPendentes} mensalidade(s) pendente(s).`,
+        );
+        setChecklistMonth(mes);
+        setChecklist(preChecklist);
+        setChecklistDialogOpen(true);
+        return;
+      }
       await periodoService.fechar(mes, selectedYear, user.nucleoId);
       toast.success("Período fechado com sucesso!");
       fetchPeriodos();
@@ -131,6 +153,21 @@ export default function PeriodosPage() {
     }
   };
 
+  const openChecklistDialog = async (mes: number) => {
+    if (!user?.nucleoId) return;
+    try {
+      setActionLoading(true);
+      const data = await periodoService.getChecklist(mes, selectedYear, user.nucleoId);
+      setChecklistMonth(mes);
+      setChecklist(data);
+      setChecklistDialogOpen(true);
+    } catch {
+      toast.error("Erro ao carregar checklist de pré-fechamento.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const openReabrirDialog = (periodo: Periodo) => {
     setPeriodoToReopen(periodo);
     setJustificativa("");
@@ -138,10 +175,15 @@ export default function PeriodosPage() {
   };
 
   const handleReabrirSubmit = async () => {
-    if (!periodoToReopen || !justificativa) return;
+    const justificativaLimpa = justificativa.trim();
+    if (!periodoToReopen || !justificativaLimpa) return;
+    if (justificativaLimpa.length < 10) {
+      toast.error("A justificativa deve ter pelo menos 10 caracteres.");
+      return;
+    }
     try {
       setActionLoading(true);
-      await periodoService.reabrir(periodoToReopen.id, justificativa);
+      await periodoService.reabrir(periodoToReopen.id, justificativaLimpa);
       toast.success("Período reaberto com sucesso!");
       setIsReabrirDialogOpen(false);
       fetchPeriodos();
@@ -315,6 +357,15 @@ export default function PeriodosPage() {
                     {isOpen && hasPendencias && (
                       <Button
                         size="sm"
+                        variant="outline"
+                        onClick={() => openChecklistDialog(mes)}
+                      >
+                        Checklist
+                      </Button>
+                    )}
+                    {isOpen && hasPendencias && (
+                      <Button
+                        size="sm"
                         variant="secondary"
                         onClick={() => {
                           setPendingMonth(mes);
@@ -387,6 +438,9 @@ export default function PeriodosPage() {
                 placeholder="Ex: Correção de lançamento duplicado..."
                 rows={4}
               />
+              <p className="text-xs text-muted-foreground">
+                Mínimo de 10 caracteres.
+              </p>
             </div>
           </div>
           <DialogFooter>
@@ -398,7 +452,7 @@ export default function PeriodosPage() {
             </Button>
             <Button
               onClick={handleReabrirSubmit}
-              disabled={!justificativa || actionLoading}
+              disabled={justificativa.trim().length < 10 || actionLoading}
             >
               Confirmar Reabertura
             </Button>
@@ -454,6 +508,32 @@ export default function PeriodosPage() {
             <Button variant="outline" onClick={() => setPendingDialogOpen(false)}>
               Fechar
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={checklistDialogOpen} onOpenChange={setChecklistDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Checklist pré-fechamento -{" "}
+              {checklistMonth ? MONTHS[checklistMonth - 1] : "-"}/{selectedYear}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p>Lançamentos em rascunho: {checklist?.lancamentosRascunho ?? 0}</p>
+            <p>Mensalidades pendentes: {checklist?.mensalidadesPendentes ?? 0}</p>
+            <p className="font-medium">
+              Pendências críticas: {checklist?.totalPendenciasCriticas ?? 0}
+            </p>
+            {(checklist?.bloqueiaFechamento ?? false) && (
+              <p className="text-red-600">
+                Fechamento bloqueado até resolver as pendências críticas.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setChecklistDialogOpen(false)}>Fechar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

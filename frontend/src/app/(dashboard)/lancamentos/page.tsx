@@ -2,8 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { lancamentoService, Lancamento } from "@/services/lancamento-service";
+import {
+  lancamentoService,
+  Lancamento,
+  ImportPreviewRow,
+  EvidenceImportPreviewRow,
+} from "@/services/lancamento-service";
 import { caixaService, Caixa } from "@/services/caixa-service";
+import {
+  contaBancariaService,
+  ContaBancaria,
+} from "@/services/conta-bancaria-service";
 import { Role } from "@/types/role";
 import { formatCurrency, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -35,11 +44,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { EvidenceCell } from "@/components/evidencia/evidence-cell";
 
 export default function LancamentoList() {
   const { user } = useAuth();
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([]);
   const [caixas, setCaixas] = useState<Caixa[]>([]);
+  const [contas, setContas] = useState<ContaBancaria[]>([]);
   const [loading, setLoading] = useState(false);
 
   // Dialog State
@@ -59,7 +70,21 @@ export default function LancamentoList() {
     { linha: number; mensagem: string }[]
   >([]);
   const [previewCount, setPreviewCount] = useState(0);
+  const [previewRows, setPreviewRows] = useState<ImportPreviewRow[]>([]);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importCaixaId, setImportCaixaId] = useState<string>("");
+  const [importContaBancariaId, setImportContaBancariaId] = useState<string>("");
+  const [evidenceImportFile, setEvidenceImportFile] = useState<File | null>(null);
+  const [evidenceImporting, setEvidenceImporting] = useState(false);
+  const [evidencePreviewErrors, setEvidencePreviewErrors] = useState<
+    { linha: number; mensagem: string }[]
+  >([]);
+  const [evidencePreviewCount, setEvidencePreviewCount] = useState(0);
+  const [evidencePreviewRows, setEvidencePreviewRows] = useState<
+    EvidenceImportPreviewRow[]
+  >([]);
+  const [evidenceImportDialogOpen, setEvidenceImportDialogOpen] =
+    useState(false);
 
   const [evidenceDialogOpen, setEvidenceDialogOpen] = useState(false);
   const [evidenceCaixaId, setEvidenceCaixaId] = useState<string>("");
@@ -68,6 +93,22 @@ export default function LancamentoList() {
   const [evidenceUrl, setEvidenceUrl] = useState<string>("");
   const [linkingEvidence, setLinkingEvidence] = useState(false);
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
+  const [auditDialogOpen, setAuditDialogOpen] = useState(false);
+  const [auditEntity, setAuditEntity] = useState<"LANCAMENTO" | "MENSALIDADE">(
+    "LANCAMENTO",
+  );
+  const [auditEntityId, setAuditEntityId] = useState("");
+  const [auditLogs, setAuditLogs] = useState<
+    {
+      id: string;
+      entidade: "LANCAMENTO" | "MENSALIDADE";
+      entidadeId: string;
+      acao: "ATTACH" | "RELINK" | "REMOVE" | "MIGRATION_LINK";
+      dataCriacao: string;
+      usuario?: { nomeCompleto?: string; email?: string };
+    }[]
+  >([]);
+  const [loadingAuditLogs, setLoadingAuditLogs] = useState(false);
   const [referenceMonth, setReferenceMonth] = useState<string>(
     new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1)
       .toISOString()
@@ -87,23 +128,57 @@ export default function LancamentoList() {
       usuario?: { nomeCompleto?: string; email?: string };
     }[]
   >([]);
+  const [evidenceImportLogs, setEvidenceImportLogs] = useState<
+    {
+      id: string;
+      arquivoNome: string;
+      linhasProcessadas: number;
+      linhasComErro: number;
+      dataCriacao: string;
+      usuario?: { nomeCompleto?: string; email?: string };
+    }[]
+  >([]);
+  const [driveProvider, setDriveProvider] = useState<
+    "LOCAL_TEST" | "GOOGLE_DRIVE"
+  >("LOCAL_TEST");
+  const [loadingDriveStatus, setLoadingDriveStatus] = useState(false);
+  const [evidenceHealthById, setEvidenceHealthById] = useState<
+    Record<string, { status: "HEALTHY" | "BROKEN" | "MISSING" | "UNKNOWN"; message: string }>
+  >({});
+
+  const canManageEvidence =
+    user?.role === Role.TESOURARIA || user?.role === Role.ADMIN_GLOBAL;
 
   const fetchData = async () => {
     if (!user?.nucleoId) return;
     setLoading(true);
     try {
-      const [lancamentoData, caixaData] = await Promise.all([
+      const [lancamentoData, caixaData, contaData] = await Promise.all([
         lancamentoService.findAllByNucleo(user.nucleoId),
         caixaService.findAllByNucleo(user.nucleoId),
+        contaBancariaService.findAllByNucleo(user.nucleoId),
       ]);
       setLancamentos(lancamentoData);
       setCaixas(caixaData);
+      setContas(contaData);
+
+      if (!importCaixaId) {
+        const caixaDefault =
+          caixaData.find((c) => c.nome.toLowerCase() === "tesouraria") ||
+          caixaData[0];
+        if (caixaDefault) setImportCaixaId(caixaDefault.id);
+      }
 
       if (user.role === Role.TESOURARIA || user.role === Role.ADMIN_GLOBAL) {
-        const logs = await lancamentoService.getImportLogs();
+        const [logs, evidenceLogs] = await Promise.all([
+          lancamentoService.getImportLogs(),
+          lancamentoService.getEvidenceMigrationLogs(),
+        ]);
         setImportLogs(logs);
+        setEvidenceImportLogs(evidenceLogs);
       } else {
         setImportLogs([]);
+        setEvidenceImportLogs([]);
       }
     } catch (error) {
       console.error(error);
@@ -114,8 +189,60 @@ export default function LancamentoList() {
 
   useEffect(() => {
     fetchData();
+    fetchDriveStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  const handleUploadEvidence = async (lancamentoId: string, file: File) => {
+    try {
+      const updated = await lancamentoService.uploadEvidence(lancamentoId, file);
+      toast.success("Evidência anexada com sucesso.");
+      if (updated.tipo === "DESPESA" && updated.status === "RASCUNHO") {
+        if (updated.tipoComprovante === "RECIBO") {
+          toast.warning(
+            "Permanece em Rascunho: recibo excede limite de salário mínimo para a data do lançamento.",
+          );
+        } else {
+          toast.warning(
+            "Permanece em Rascunho: verifique exigências de comprovante para registrar a despesa.",
+          );
+        }
+      }
+      await fetchData();
+    } catch {
+      toast.error("Falha ao anexar evidência.");
+    }
+  };
+
+  const handleRemoveEvidence = async (lancamentoId: string) => {
+    try {
+      await lancamentoService.clearEvidence(lancamentoId);
+      toast.success("Vínculo de evidência removido.");
+      await fetchData();
+    } catch {
+      toast.error("Falha ao remover evidência.");
+    }
+  };
+
+  const handleCheckEvidenceHealth = async (lancamentoId: string) => {
+    try {
+      const result = await lancamentoService.getEvidenceHealth(lancamentoId);
+      setEvidenceHealthById((prev) => ({
+        ...prev,
+        [lancamentoId]: { status: result.status, message: result.message },
+      }));
+
+      if (result.status === "BROKEN") {
+        toast.error("Link de evidência quebrado. Use 'Trocar' para relink.");
+      } else if (result.status === "HEALTHY") {
+        toast.success("Evidência validada com sucesso.");
+      } else {
+        toast.info(result.message);
+      }
+    } catch {
+      toast.error("Não foi possível verificar a evidência.");
+    }
+  };
 
   const filteredLancamentos = lancamentos.filter((l) => {
     if (typeFilter !== "ALL" && l.tipo !== typeFilter) return false;
@@ -164,6 +291,18 @@ export default function LancamentoList() {
     setIsDialogOpen(true);
   };
 
+  const fetchDriveStatus = async () => {
+    setLoadingDriveStatus(true);
+    try {
+      const status = await lancamentoService.getDriveEvidenceStatus();
+      setDriveProvider(status.provider);
+    } catch {
+      setDriveProvider("LOCAL_TEST");
+    } finally {
+      setLoadingDriveStatus(false);
+    }
+  };
+
   const openEditDialog = (l: Lancamento) => {
     setEditingLancamento(l);
     setIsDialogOpen(true);
@@ -173,9 +312,19 @@ export default function LancamentoList() {
     if (!importFile) return;
     setImporting(true);
     try {
-      const result = await lancamentoService.importPreview(importFile);
+      const isOfx = importFile.name.toLowerCase().endsWith(".ofx");
+      const result = await lancamentoService.importPreview(
+        importFile,
+        isOfx
+          ? {
+              caixaId: importCaixaId || undefined,
+              contaBancariaId: importContaBancariaId || undefined,
+            }
+          : undefined,
+      );
       setPreviewErrors(result.errors);
       setPreviewCount(result.validRows.length);
+      setPreviewRows(result.validRows);
       toast.success("Prévia processada.");
     } catch {
       toast.error("Falha ao processar prévia de importação.");
@@ -188,14 +337,62 @@ export default function LancamentoList() {
     if (!importFile) return;
     setImporting(true);
     try {
-      const result = await lancamentoService.importExecute(importFile);
+      const isOfx = importFile.name.toLowerCase().endsWith(".ofx");
+      const result = await lancamentoService.importExecute(
+        importFile,
+        isOfx
+          ? {
+              caixaId: importCaixaId || undefined,
+              contaBancariaId: importContaBancariaId || undefined,
+            }
+          : undefined,
+      );
       toast.success(`${result.created} lançamentos importados.`);
       setPreviewErrors(result.errors);
+      setPreviewRows([]);
+      setPreviewCount(0);
       await fetchData();
     } catch {
       toast.error("Falha ao importar lançamentos.");
     } finally {
       setImporting(false);
+    }
+  };
+
+  const handlePreviewEvidenceImport = async () => {
+    if (!evidenceImportFile) return;
+    setEvidenceImporting(true);
+    try {
+      const result = await lancamentoService.importEvidencePreview(
+        evidenceImportFile,
+      );
+      setEvidencePreviewErrors(result.errors);
+      setEvidencePreviewCount(result.validRows.length);
+      setEvidencePreviewRows(result.validRows);
+      toast.success("Prévia de migração processada.");
+    } catch {
+      toast.error("Falha ao processar prévia de migração.");
+    } finally {
+      setEvidenceImporting(false);
+    }
+  };
+
+  const handleExecuteEvidenceImport = async () => {
+    if (!evidenceImportFile) return;
+    setEvidenceImporting(true);
+    try {
+      const result = await lancamentoService.importEvidenceExecute(
+        evidenceImportFile,
+      );
+      toast.success(`${result.processed} vínculos de evidência atualizados.`);
+      setEvidencePreviewErrors(result.errors);
+      setEvidencePreviewRows([]);
+      setEvidencePreviewCount(0);
+      await fetchData();
+    } catch {
+      toast.error("Falha ao importar vínculos de evidência.");
+    } finally {
+      setEvidenceImporting(false);
     }
   };
 
@@ -249,6 +446,33 @@ export default function LancamentoList() {
     }
   };
 
+  const handleLoadAuditLogs = async () => {
+    setLoadingAuditLogs(true);
+    try {
+      const logs = await lancamentoService.getEvidenceAuditLogs({
+        entidade: auditEntity,
+        entidadeId: auditEntityId.trim() || undefined,
+      });
+      setAuditLogs(logs);
+    } catch {
+      toast.error("Falha ao carregar auditoria de evidências.");
+    } finally {
+      setLoadingAuditLogs(false);
+    }
+  };
+
+  const isOfxImport = importFile?.name.toLowerCase().endsWith(".ofx") ?? false;
+
+  const getCaixaName = (id?: string) => {
+    if (!id) return "Tesouraria";
+    return caixas.find((c) => c.id === id)?.nome || "Tesouraria";
+  };
+
+  const getContaName = (id?: string) => {
+    if (!id) return "-";
+    return contas.find((c) => c.id === id)?.nome_conta || "-";
+  };
+
   return (
     <div className="p-4 md:p-8 space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -262,7 +486,7 @@ export default function LancamentoList() {
               <SelectValue placeholder="Filtrar por Caixa" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">Todas as Caixas</SelectItem>
+              <SelectItem value="ALL">Todos os Caixas</SelectItem>
               {caixas.map((caixa) => (
                 <SelectItem key={caixa.id} value={caixa.id}>
                   {caixa.nome}
@@ -317,6 +541,12 @@ export default function LancamentoList() {
           </Button>
           <Button
             variant="outline"
+            onClick={() => setEvidenceImportDialogOpen(true)}
+          >
+            Migrar evidências (lote)
+          </Button>
+          <Button
+            variant="outline"
             onClick={() => setEvidenceDialogOpen(true)}
           >
             Evidência Compartilhada (Receitas)
@@ -327,6 +557,16 @@ export default function LancamentoList() {
           >
             Duplicar mês anterior
           </Button>
+          <Button variant="outline" onClick={() => setAuditDialogOpen(true)}>
+            Auditoria de evidências
+          </Button>
+          <span className="text-xs text-muted-foreground self-center">
+            {loadingDriveStatus
+              ? "Verificando provider de evidência..."
+              : driveProvider === "GOOGLE_DRIVE"
+                ? "Evidências: Google Drive"
+                : "Evidências: modo local de teste"}
+          </span>
         </div>
       </div>
 
@@ -423,22 +663,19 @@ export default function LancamentoList() {
                   </Badge>
                 </TableCell>
                 <TableCell>
-                  {lancamento.evidenciaWebViewLink ||
-                  lancamento.comprovante_url ? (
-                    <a
-                      href={
-                        lancamento.evidenciaWebViewLink ||
-                        lancamento.comprovante_url
-                      }
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs underline text-primary"
-                    >
-                      Ver evidência
-                    </a>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">-</span>
-                  )}
+                  <EvidenceCell
+                    link={
+                      lancamento.evidenciaWebViewLink ||
+                      lancamento.comprovante_url ||
+                      undefined
+                    }
+                    healthStatus={evidenceHealthById[lancamento.id]?.status}
+                    healthMessage={evidenceHealthById[lancamento.id]?.message}
+                    canManage={canManageEvidence}
+                    onUpload={(file) => handleUploadEvidence(lancamento.id, file)}
+                    onRemove={() => handleRemoveEvidence(lancamento.id)}
+                    onCheckHealth={() => handleCheckEvidenceHealth(lancamento.id)}
+                  />
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">
@@ -506,6 +743,38 @@ export default function LancamentoList() {
         </div>
       )}
 
+      {(user?.role === Role.TESOURARIA || user?.role === Role.ADMIN_GLOBAL) && (
+        <div className="rounded-md border p-4 space-y-3">
+          <h2 className="text-lg font-semibold">Logs de migração de evidências</h2>
+          {evidenceImportLogs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nenhum log de migração encontrado.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {evidenceImportLogs.slice(0, 10).map((log) => (
+                <div
+                  key={log.id}
+                  className="rounded-md border p-3 flex items-start justify-between gap-4"
+                >
+                  <div>
+                    <p className="font-medium">{log.arquivoNome}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(log.dataCriacao).toLocaleString()} -{" "}
+                      {log.usuario?.nomeCompleto || log.usuario?.email || "Usuário"}
+                    </p>
+                  </div>
+                  <div className="text-right text-sm">
+                    <p>Processadas: {log.linhasProcessadas}</p>
+                    <p>Erros: {log.linhasComErro}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <LancamentoFormDialog
         open={isDialogOpen}
         onOpenChange={setIsDialogOpen}
@@ -515,26 +784,78 @@ export default function LancamentoList() {
       />
 
       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-6xl h-[90vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>Importação em lote de lançamentos</DialogTitle>
+            <DialogTitle>Importação em lote (Extrato e Lançamentos)</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
-            <Label>Arquivo CSV/XLSX</Label>
+          <div className="space-y-3 overflow-y-auto flex-1 pr-1">
+            <Label>Arquivo CSV/XLSX/OFX</Label>
             <Input
               type="file"
               accept=".csv,.xlsx,.xls,.ofx"
-              onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+              onChange={(e) => {
+                setImportFile(e.target.files?.[0] || null);
+                setPreviewRows([]);
+                setPreviewCount(0);
+                setPreviewErrors([]);
+              }}
             />
             <p className="text-sm text-muted-foreground">
               Arquivos aceitos: CSV, XLSX, XLS e OFX. Para planilhas, colunas
               esperadas: tipo, descricao, valor, categoria, subcategoria,
               observacao, data_movimento, caixaId, status, comprovante_url.
             </p>
+            <p className="text-sm text-muted-foreground">
+              A tabela de prévia abaixo permite revisar os registros do extrato
+              (OFX/CSV) ou da planilha antes de gravar no banco.
+            </p>
             <p className="text-xs text-muted-foreground">
               Regra OFX: receitas entram como REGISTRADO; despesas entram como
               RASCUNHO para exigir comprovante fiscal próprio.
             </p>
+            {isOfxImport && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-md border p-3">
+                <div className="space-y-2">
+                  <Label>Caixa de destino (OFX)</Label>
+                  <Select value={importCaixaId} onValueChange={setImportCaixaId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione a caixa" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {caixas.map((caixa) => (
+                        <SelectItem key={caixa.id} value={caixa.id}>
+                          {caixa.nome}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Padrão: Tesouraria.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Conta bancária vinculada (OFX)</Label>
+                  <Select
+                    value={importContaBancariaId || "__none__"}
+                    onValueChange={(value) =>
+                      setImportContaBancariaId(value === "__none__" ? "" : value)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Opcional" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Sem conta vinculada</SelectItem>
+                      {contas.map((conta) => (
+                        <SelectItem key={conta.id} value={conta.id}>
+                          {conta.nome_conta}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
             <a
               href="/templates/template-importacao-lancamentos.csv"
               download
@@ -550,6 +871,66 @@ export default function LancamentoList() {
                 Linhas com erro: <strong>{previewErrors.length}</strong>
               </p>
             </div>
+            {previewRows.length > 0 && (
+              <div className="rounded-md border overflow-auto max-h-[42vh]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Linha</TableHead>
+                      <TableHead>Tipo</TableHead>
+                      <TableHead>Data</TableHead>
+                      <TableHead>Descrição</TableHead>
+                      <TableHead>Categoria</TableHead>
+                      <TableHead>Caixa</TableHead>
+                      <TableHead>Conta</TableHead>
+                      <TableHead className="text-right">Valor</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {previewRows.map((row) => (
+                      <TableRow key={`${row.linha}-${row.descricao}`}>
+                        <TableCell>{row.linha}</TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              row.tipo === "RECEITA" ? "default" : "destructive"
+                            }
+                            className={
+                              row.tipo === "RECEITA"
+                                ? "bg-green-600"
+                                : "bg-red-600"
+                            }
+                          >
+                            {row.tipo}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {new Date(row.data_movimento).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell className="max-w-[260px] truncate">
+                          {row.descricao}
+                        </TableCell>
+                        <TableCell>
+                          {row.categoria}
+                          {row.subcategoria ? ` / ${row.subcategoria}` : ""}
+                        </TableCell>
+                        <TableCell>{getCaixaName(row.caixaId)}</TableCell>
+                        <TableCell>{getContaName(row.contaBancariaId)}</TableCell>
+                        <TableCell className="text-right">
+                          {formatCurrency(row.valor)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">
+                            {row.status || "RASCUNHO"}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
             {previewErrors.length > 0 && (
               <div className="max-h-48 overflow-auto rounded-md border p-2 text-sm">
                 {previewErrors.map((err, idx) => (
@@ -596,7 +977,7 @@ export default function LancamentoList() {
               <Label>Caixa</Label>
               <Select value={evidenceCaixaId} onValueChange={setEvidenceCaixaId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Selecione a caixa" />
+                  <SelectValue placeholder="Selecione o caixa" />
                 </SelectTrigger>
                 <SelectContent>
                   {caixas.map((caixa) => (
@@ -659,6 +1040,106 @@ export default function LancamentoList() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={evidenceImportDialogOpen}
+        onOpenChange={setEvidenceImportDialogOpen}
+      >
+        <DialogContent className="sm:max-w-6xl h-[90vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Migração de evidências antigas (lote)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 overflow-y-auto flex-1 pr-1">
+            <Label>Arquivo CSV/XLSX</Label>
+            <Input
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              onChange={(e) => {
+                setEvidenceImportFile(e.target.files?.[0] || null);
+                setEvidencePreviewRows([]);
+                setEvidencePreviewCount(0);
+                setEvidencePreviewErrors([]);
+              }}
+            />
+            <p className="text-sm text-muted-foreground">
+              Colunas esperadas: entidade (LANCAMENTO|MENSALIDADE), id, url.
+            </p>
+            <a
+              href="/templates/template-migracao-evidencias.csv"
+              download
+              className="text-sm underline text-primary"
+            >
+              Baixar template de migração
+            </a>
+            <div className="rounded-md border p-3 text-sm">
+              <p>
+                Linhas válidas na prévia: <strong>{evidencePreviewCount}</strong>
+              </p>
+              <p>
+                Linhas com erro: <strong>{evidencePreviewErrors.length}</strong>
+              </p>
+            </div>
+            {evidencePreviewRows.length > 0 && (
+              <div className="rounded-md border overflow-auto max-h-[38vh]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Linha</TableHead>
+                      <TableHead>Entidade</TableHead>
+                      <TableHead>ID</TableHead>
+                      <TableHead>URL</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {evidencePreviewRows.map((row) => (
+                      <TableRow key={`${row.linha}-${row.id}`}>
+                        <TableCell>{row.linha}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{row.entidade}</Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{row.id}</TableCell>
+                        <TableCell className="max-w-[420px] truncate text-xs">
+                          {row.url}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            {evidencePreviewErrors.length > 0 && (
+              <div className="max-h-48 overflow-auto rounded-md border p-2 text-sm">
+                {evidencePreviewErrors.map((err, idx) => (
+                  <p key={`${err.linha}-${idx}`}>
+                    Linha {err.linha}: {err.mensagem}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setEvidenceImportDialogOpen(false)}
+            >
+              Fechar
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!evidenceImportFile || evidenceImporting}
+              onClick={handlePreviewEvidenceImport}
+            >
+              Prévia
+            </Button>
+            <Button
+              disabled={!evidenceImportFile || evidenceImporting}
+              onClick={handleExecuteEvidenceImport}
+            >
+              Importar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -700,6 +1181,66 @@ export default function LancamentoList() {
               disabled={!referenceMonth || !targetMonth || duplicating}
             >
               Duplicar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={auditDialogOpen} onOpenChange={setAuditDialogOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Auditoria de evidências</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="space-y-2">
+              <Label>Entidade</Label>
+              <Select
+                value={auditEntity}
+                onValueChange={(v: "LANCAMENTO" | "MENSALIDADE") =>
+                  setAuditEntity(v)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="LANCAMENTO">LANCAMENTO</SelectItem>
+                  <SelectItem value="MENSALIDADE">MENSALIDADE</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="md:col-span-2 space-y-2">
+              <Label>ID da entidade (opcional)</Label>
+              <Input
+                value={auditEntityId}
+                onChange={(e) => setAuditEntityId(e.target.value)}
+                placeholder="Filtrar por um registro específico"
+              />
+            </div>
+          </div>
+          <div className="rounded-md border max-h-80 overflow-auto p-2 text-sm space-y-2">
+            {auditLogs.length === 0 ? (
+              <p className="text-muted-foreground">Nenhum log carregado.</p>
+            ) : (
+              auditLogs.map((log) => (
+                <div key={log.id} className="rounded-md border p-2">
+                  <p className="font-medium">
+                    {log.acao} - {log.entidade} ({log.entidadeId})
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {new Date(log.dataCriacao).toLocaleString()} -{" "}
+                    {log.usuario?.nomeCompleto || log.usuario?.email || "Usuário"}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAuditDialogOpen(false)}>
+              Fechar
+            </Button>
+            <Button disabled={loadingAuditLogs} onClick={handleLoadAuditLogs}>
+              Carregar logs
             </Button>
           </DialogFooter>
         </DialogContent>

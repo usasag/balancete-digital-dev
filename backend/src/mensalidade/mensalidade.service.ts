@@ -1,11 +1,12 @@
 import {
   Injectable,
   NotFoundException,
+  BadRequestException,
   Inject,
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DeepPartial } from 'typeorm';
+import { Repository, DeepPartial, In } from 'typeorm';
 import { Mensalidade } from './mensalidade.entity';
 import { Usuario } from '../usuario/usuario.entity';
 import { LancamentoService } from '../lancamento/lancamento.service';
@@ -15,12 +16,16 @@ import { ConfiguracaoService } from '../configuracao/configuracao.service';
 import { UsuarioTaxaService } from '../usuario-taxa/usuario-taxa.service';
 import dayjs from 'dayjs';
 import { Cron } from '@nestjs/schedule';
+import { FileStorageService } from '../file-storage/file-storage.service';
+import { MensalidadePagamento } from './mensalidade-pagamento.entity';
 
 @Injectable()
 export class MensalidadeService {
   constructor(
     @InjectRepository(Mensalidade)
     private repo: Repository<Mensalidade>,
+    @InjectRepository(MensalidadePagamento)
+    private pagamentoRepo: Repository<MensalidadePagamento>,
     @InjectRepository(Taxa)
     private taxaRepo: Repository<Taxa>,
     @Inject(forwardRef(() => LancamentoService))
@@ -28,6 +33,7 @@ export class MensalidadeService {
     private userService: UsuarioService,
     private configService: ConfiguracaoService,
     private usuarioTaxaService: UsuarioTaxaService,
+    private fileStorageService: FileStorageService,
   ) {}
 
   async create(data: DeepPartial<Mensalidade>): Promise<Mensalidade> {
@@ -104,6 +110,9 @@ export class MensalidadeService {
     }
 
     mensalidade.valor_total = total;
+    mensalidade.valor_pago_acumulado =
+      Number(mensalidade.valor_pago_acumulado || 0);
+    mensalidade.saldo_aberto = Math.max(0, total - mensalidade.valor_pago_acumulado);
   }
 
   async addTaxa(mensalidadeId: string, taxaId: string): Promise<Mensalidade> {
@@ -219,6 +228,21 @@ export class MensalidadeService {
     return mensalidades;
   }
 
+  async countPendenciasByReferencia(
+    nucleoId: string,
+    mes: number,
+    ano: number,
+  ): Promise<number> {
+    const mesReferencia = `${String(mes).padStart(2, '0')}/${ano}`;
+    return this.repo.count({
+      where: {
+        nucleoId,
+        mes_referencia: mesReferencia,
+        status: In(['PENDENTE', 'PARCIAL', 'ATRASADO', 'INADIMPLENTE']),
+      },
+    });
+  }
+
   async findOne(id: string): Promise<Mensalidade> {
     const mensalidade = await this.repo.findOne({
       where: { id },
@@ -251,6 +275,48 @@ export class MensalidadeService {
     return this.findOne(id);
   }
 
+  async uploadEvidence(
+    id: string,
+    file: {
+      buffer: Buffer;
+      originalname: string;
+      mimetype: string;
+    },
+  ): Promise<Mensalidade> {
+    const mensalidade = await this.findOne(id);
+    const movementDate = mensalidade.data_pagamento
+      ? new Date(mensalidade.data_pagamento)
+      : new Date();
+
+    const uploaded = await this.fileStorageService.uploadFileWithMetadata(
+      file.buffer,
+      file.originalname,
+      file.mimetype,
+      mensalidade.nucleoId,
+      {
+        tipo: 'RECEITA',
+        dataMovimento: movementDate,
+        domain: 'mensalidade',
+      },
+    );
+
+    return this.update(id, {
+      evidenciaDriveFileId: uploaded.driveFileId || undefined,
+      evidenciaDriveFolderId: uploaded.driveFolderId || undefined,
+      evidenciaWebViewLink: uploaded.webViewLink || uploaded.url,
+    });
+  }
+
+  async clearEvidence(id: string): Promise<Mensalidade> {
+    await this.findOne(id);
+    await this.repo.update(id, {
+      evidenciaDriveFileId: null,
+      evidenciaDriveFolderId: null,
+      evidenciaWebViewLink: null,
+    } as unknown as DeepPartial<Mensalidade>);
+    return this.findOne(id);
+  }
+
   async registerAgreement(
     id: string,
     agreementDate: Date,
@@ -263,16 +329,65 @@ export class MensalidadeService {
 
   async pay(id: string, paymentDate?: Date): Promise<Mensalidade> {
     const mensalidade = await this.findOne(id);
-    if (mensalidade.status === 'PAGO') return mensalidade;
+    const saldoAtual = Number(mensalidade.saldo_aberto || mensalidade.valor_total);
+    return this.registerPayment(id, {
+      valor: saldoAtual,
+      metodoPagamento: 'PIX',
+      dataPagamento: paymentDate,
+    });
+  }
 
-    mensalidade.status = 'PAGO';
-    mensalidade.data_pagamento = paymentDate || new Date();
+  async registerPayment(
+    id: string,
+    payload: {
+      valor: number;
+      metodoPagamento: 'PIX' | 'DINHEIRO' | 'TRANSFERENCIA' | 'OUTRO';
+      dataPagamento?: Date;
+      recebidoPorId?: string;
+      observacao?: string;
+    },
+  ): Promise<Mensalidade> {
+    const mensalidade = await this.findOne(id);
+    const valor = Number(payload.valor || 0);
+    if (!Number.isFinite(valor) || valor <= 0) {
+      throw new BadRequestException('Valor de pagamento inválido.');
+    }
+
+    if (Number(mensalidade.saldo_aberto || mensalidade.valor_total) <= 0) {
+      return mensalidade;
+    }
+
+    const pagamentoReal = Math.min(
+      valor,
+      Number(mensalidade.saldo_aberto || mensalidade.valor_total),
+    );
+
+    const pagamento = this.pagamentoRepo.create({
+      mensalidadeId: mensalidade.id,
+      valor: pagamentoReal,
+      metodoPagamento: payload.metodoPagamento,
+      dataPagamento: payload.dataPagamento || new Date(),
+      recebidoPorId: payload.recebidoPorId || null,
+      observacao: payload.observacao,
+    });
+    await this.pagamentoRepo.save(pagamento);
+
+    mensalidade.valor_pago_acumulado = Number(
+      Number(mensalidade.valor_pago_acumulado || 0) + pagamentoReal,
+    );
+    mensalidade.saldo_aberto = Number(
+      Math.max(0, Number(mensalidade.valor_total) - mensalidade.valor_pago_acumulado),
+    );
+    mensalidade.metodoPagamento = payload.metodoPagamento;
+    mensalidade.data_pagamento = payload.dataPagamento || new Date();
+    mensalidade.status = mensalidade.saldo_aberto > 0 ? 'PARCIAL' : 'PAGO';
     await this.repo.save(mensalidade);
 
     const config = await this.configService.findOneByNucleo(
       mensalidade.nucleoId,
     );
-    const date = paymentDate || new Date(); // Payment date
+    const date = payload.dataPagamento || new Date();
+    const proporcao = Number(pagamentoReal / Number(mensalidade.valor_total || 1));
 
     // 1. Mensalidade Base
     if (Number(mensalidade.valor_base) > 0) {
@@ -284,7 +399,7 @@ export class MensalidadeService {
         descricao: `Mensalidade ${mensalidade.mes_referencia} - ${
           mensalidade.socio?.nomeCompleto || 'Sócio'
         }`,
-        valor: Number(mensalidade.valor_base),
+        valor: Number(Number(mensalidade.valor_base) * proporcao),
         tipo: 'RECEITA',
         categoria: 'MENSALIDADE',
         subcategoria: 'Mensalidade Líquida',
@@ -305,7 +420,7 @@ export class MensalidadeService {
             descricao: `${item.nome} - ${
               mensalidade.socio?.nomeCompleto || 'Sócio'
             }`,
-            valor: Number(item.valor),
+            valor: Number(Number(item.valor) * proporcao),
             tipo: 'RECEITA',
             categoria: 'MENSALIDADE',
             subcategoria: item.nome, // E.g., 'Repasse Diretoria Geral'
@@ -327,7 +442,7 @@ export class MensalidadeService {
           descricao: `${taxa.descricao} (${taxa.parcela_atual}/${
             taxa.total_parcelas
           }) - ${mensalidade.socio?.nomeCompleto || 'Sócio'}`,
-          valor: Number(taxa.valor_parcela),
+          valor: Number(Number(taxa.valor_parcela) * proporcao),
           tipo: 'RECEITA',
           categoria: 'TAXA EXTRA',
           subcategoria: taxa.descricao,
@@ -336,7 +451,7 @@ export class MensalidadeService {
       }
     }
 
-    return mensalidade;
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {
@@ -582,7 +697,7 @@ export class MensalidadeService {
       .leftJoinAndSelect('mensalidade.socio', 'socio')
       .where('mensalidade.nucleo_id = :nucleoId', { nucleoId })
       .andWhere('mensalidade.status IN (:...statuses)', {
-        statuses: ['PENDENTE', 'ATRASADO', 'INADIMPLENTE'],
+        statuses: ['PENDENTE', 'PARCIAL', 'ATRASADO', 'INADIMPLENTE'],
       })
       .andWhere('mensalidade.data_vencimento < :today', { today })
       .orderBy('mensalidade.data_vencimento', 'ASC')

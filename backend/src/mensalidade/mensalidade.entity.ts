@@ -35,6 +35,12 @@ export class Mensalidade {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   valor_total: number;
 
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  valor_pago_acumulado: number;
+
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  saldo_aberto: number;
+
   @Column({ type: 'text', nullable: true })
   data_vencimento: string; // YYYY-MM-DD
 
@@ -65,6 +71,9 @@ export class Mensalidade {
 
   @Column({ nullable: true })
   data_pagamento: Date;
+
+  @Column({ name: 'metodo_pagamento', nullable: true })
+  metodoPagamento: string;
 
   @Column({ nullable: true })
   data_acordo: Date;

@@ -6,6 +6,7 @@ import { LancamentoFinanceiro } from '../lancamento/lancamento.entity';
 import { Usuario } from '../usuario/usuario.entity';
 import { BalanceteService } from './balancete.service';
 import { BalanceteController } from './balancete.controller';
+import { ConfiguracaoModule } from '../configuracao/configuracao.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { BalanceteController } from './balancete.controller';
       LancamentoFinanceiro,
       Usuario,
     ]),
+    ConfiguracaoModule,
   ],
   controllers: [BalanceteController],
   providers: [BalanceteService],

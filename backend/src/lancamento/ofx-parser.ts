@@ -46,7 +46,10 @@ export function parseOfxTransactions(content: string): OfxTransaction[] {
   return transactions;
 }
 
-export function ofxTransactionsToImportRows(transactions: OfxTransaction[]) {
+export function ofxTransactionsToImportRows(
+  transactions: OfxTransaction[],
+  defaults?: { caixaId?: string; contaBancariaId?: string },
+) {
   return transactions
     .filter((tx) => Number.isFinite(tx.trnAmt) && tx.trnAmt !== 0 && tx.dtPosted)
     .map((tx) => {
@@ -65,6 +68,8 @@ export function ofxTransactionsToImportRows(transactions: OfxTransaction[]) {
           : `OFX ${tx.trnType || ''}`.trim(),
         data_movimento: tx.dtPosted,
         status,
+        caixaId: defaults?.caixaId,
+        contaBancariaId: defaults?.contaBancariaId,
       };
     });
 }

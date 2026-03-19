@@ -11,6 +11,7 @@ import { Nucleo } from '../nucleo/nucleo.entity';
 import { Usuario } from '../usuario/usuario.entity';
 import { Caixa } from '../caixa/caixa.entity';
 import { Mensalidade } from '../mensalidade/mensalidade.entity';
+import { ContaBancaria } from '../conta-bancaria/conta-bancaria.entity';
 
 @Entity('lancamento_financeiro')
 export class LancamentoFinanceiro {
@@ -25,6 +26,9 @@ export class LancamentoFinanceiro {
 
   @Column({ nullable: true })
   comprovante_url: string;
+
+  @Column({ name: 'tipo_comprovante', nullable: true })
+  tipoComprovante: string;
 
   @Column({ name: 'evidencia_drive_file_id', nullable: true })
   evidenciaDriveFileId: string;
@@ -66,6 +70,13 @@ export class LancamentoFinanceiro {
 
   @Column({ name: 'caixa_id', nullable: true })
   caixaId: string;
+
+  @ManyToOne(() => ContaBancaria, { nullable: true })
+  @JoinColumn({ name: 'conta_bancaria_id' })
+  contaBancaria: ContaBancaria;
+
+  @Column({ name: 'conta_bancaria_id', nullable: true })
+  contaBancariaId: string;
 
   @ManyToOne(() => Usuario)
   @JoinColumn({ name: 'criado_por' })

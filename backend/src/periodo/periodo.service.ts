@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 import { Periodo, PeriodoStatus, ReaberturaLog } from './periodo.entity';
 import { LancamentoService } from '../lancamento/lancamento.service';
 import { BalanceteService } from '../balancete/balancete.service';
+import { MensalidadeService } from '../mensalidade/mensalidade.service';
 
 @Injectable()
 export class PeriodoService {
@@ -20,6 +21,8 @@ export class PeriodoService {
     private lancamentoService: LancamentoService,
     @Inject(forwardRef(() => BalanceteService))
     private balanceteService: BalanceteService,
+    @Inject(forwardRef(() => MensalidadeService))
+    private mensalidadeService: MensalidadeService,
   ) {}
 
   async findByNucleo(
@@ -34,11 +37,15 @@ export class PeriodoService {
       periodos.map(async (p) => {
         let pendencias = 0;
         if (p.status === PeriodoStatus.ABERTO) {
-          pendencias = await this.lancamentoService.countRascunhos(
-            nucleoId,
-            p.mes,
-            p.ano,
-          );
+          const [rascunhos, mensalidadesPendentes] = await Promise.all([
+            this.lancamentoService.countRascunhos(nucleoId, p.mes, p.ano),
+            this.mensalidadeService.countPendenciasByReferencia(
+              nucleoId,
+              p.mes,
+              p.ano,
+            ),
+          ]);
+          pendencias = rascunhos + mensalidadesPendentes;
         }
         return { ...p, pendencias };
       }),
@@ -55,6 +62,12 @@ export class PeriodoService {
     const periodo = await this.repo.findOne({
       where: { mes, ano, nucleoId },
     });
+    return periodo;
+  }
+
+  async findById(id: string): Promise<Periodo> {
+    const periodo = await this.repo.findOne({ where: { id } });
+    if (!periodo) throw new NotFoundException('Período não encontrado');
     return periodo;
   }
 
@@ -101,17 +114,20 @@ export class PeriodoService {
       return periodo;
     }
 
-    // Check for drafts
-    const lancamentos = await this.lancamentoService.findAllByMesAno(
-      nucleoId,
-      mes,
-      ano,
-    );
-    const hasDrafts = lancamentos.some((l) => l.status === 'RASCUNHO');
+    const [rascunhos, mensalidadesPendentes] = await Promise.all([
+      this.lancamentoService.countRascunhos(nucleoId, mes, ano),
+      this.mensalidadeService.countPendenciasByReferencia(nucleoId, mes, ano),
+    ]);
 
-    if (hasDrafts) {
+    if (rascunhos > 0) {
       throw new BadRequestException(
         'Não é possível fechar o período pois existem lançamentos em RASCUNHO.',
+      );
+    }
+
+    if (mensalidadesPendentes > 0) {
+      throw new BadRequestException(
+        'Não é possível fechar o período pois existem mensalidades pendentes no mês de referência.',
       );
     }
 
@@ -125,22 +141,114 @@ export class PeriodoService {
     usuarioId: string,
     justificativa: string,
   ): Promise<Periodo> {
-    const periodo = await this.repo.findOne({ where: { id } });
-    if (!periodo) throw new NotFoundException('Período não encontrado');
+    const periodo = await this.findById(id);
 
     if (periodo.status === PeriodoStatus.ABERTO) {
       return periodo;
     }
 
+    const justificativaNormalizada = justificativa?.trim() || '';
+    if (justificativaNormalizada.length < 10) {
+      throw new BadRequestException(
+        'Justificativa obrigatória com no mínimo 10 caracteres para reabertura.',
+      );
+    }
+
     const log: ReaberturaLog = {
       data: new Date(),
       usuarioId,
-      justificativa,
+      justificativa: justificativaNormalizada,
     };
 
     periodo.status = PeriodoStatus.ABERTO;
     periodo.reaberturas = [...(periodo.reaberturas || []), log];
     return this.repo.save(periodo);
+  }
+
+  async getChecklist(mes: number, ano: number, nucleoId: string) {
+    const [lancamentosRascunho, mensalidadesPendentes] = await Promise.all([
+      this.lancamentoService.countRascunhos(nucleoId, mes, ano),
+      this.mensalidadeService.countPendenciasByReferencia(nucleoId, mes, ano),
+    ]);
+
+    const totalPendenciasCriticas = lancamentosRascunho + mensalidadesPendentes;
+    return {
+      lancamentosRascunho,
+      mensalidadesPendentes,
+      totalPendenciasCriticas,
+      bloqueiaFechamento: totalPendenciasCriticas > 0,
+    };
+  }
+
+  async getAlertas(nucleoId: string) {
+    const now = new Date();
+    const mesAtual = now.getMonth() + 1;
+    const anoAtual = now.getFullYear();
+
+    const [checklistAtual, periodos, inadimplencia] = await Promise.all([
+      this.getChecklist(mesAtual, anoAtual, nucleoId),
+      this.findByNucleo(nucleoId),
+      this.mensalidadeService.getInadimplenciaReport(nucleoId),
+    ]);
+
+    const alertas: Array<{
+      code: string;
+      severity: 'info' | 'warning' | 'critical';
+      title: string;
+      message: string;
+    }> = [];
+
+    if (checklistAtual.lancamentosRascunho > 0) {
+      alertas.push({
+        code: 'LANCAMENTOS_RASCUNHO',
+        severity: 'warning',
+        title: 'Lançamentos em rascunho',
+        message: `${checklistAtual.lancamentosRascunho} lançamento(s) em rascunho no mês atual.`,
+      });
+    }
+
+    if (checklistAtual.mensalidadesPendentes > 0) {
+      alertas.push({
+        code: 'MENSALIDADES_PENDENTES',
+        severity: 'warning',
+        title: 'Mensalidades pendentes',
+        message: `${checklistAtual.mensalidadesPendentes} mensalidade(s) pendente(s) no mês de referência atual.`,
+      });
+    }
+
+    const periodoAnterior = periodos.find(
+      (p) =>
+        (mesAtual === 1
+          ? p.mes === 12 && p.ano === anoAtual - 1
+          : p.mes === mesAtual - 1 && p.ano === anoAtual),
+    );
+    if (periodoAnterior && periodoAnterior.status !== PeriodoStatus.FECHADO) {
+      alertas.push({
+        code: 'PERIODO_ANTERIOR_ABERTO',
+        severity: 'critical',
+        title: 'Período anterior ainda aberto',
+        message: `O período ${String(periodoAnterior.mes).padStart(2, '0')}/${periodoAnterior.ano} ainda não foi fechado.`,
+      });
+    }
+
+    if (inadimplencia.length > 0) {
+      const totalDevido = inadimplencia.reduce(
+        (acc, item) => acc + Number(item.total_devido || 0),
+        0,
+      );
+      alertas.push({
+        code: 'INADIMPLENCIA_ATIVA',
+        severity: 'info',
+        title: 'Inadimplência ativa',
+        message: `${inadimplencia.length} sócio(s) com atraso. Total devido: R$ ${totalDevido.toFixed(2)}.`,
+      });
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      total: alertas.length,
+      alertas,
+    };
   }
 
   async checkPermissao(

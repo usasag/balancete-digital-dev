@@ -65,6 +65,7 @@ export function LancamentoFormDialog({
     tipo: "DESPESA" as "RECEITA" | "DESPESA",
     caixaId: "",
     status: "RASCUNHO" as "RASCUNHO" | "REGISTRADO",
+    tipoComprovante: "NOTA_FISCAL" as "NOTA_FISCAL" | "RECIBO",
   });
 
   // Fetch caixas and categories on mount/open
@@ -111,6 +112,7 @@ export function LancamentoFormDialog({
         tipo: lancamentoToEdit.tipo,
         caixaId: lancamentoToEdit.caixaId || "",
         status: lancamentoToEdit.status || "RASCUNHO",
+        tipoComprovante: lancamentoToEdit.tipoComprovante || "NOTA_FISCAL",
       });
       setFile(null); // Reset file on new edit
     } else {
@@ -125,6 +127,7 @@ export function LancamentoFormDialog({
         tipo: "DESPESA",
         caixaId: "",
         status: "RASCUNHO",
+        tipoComprovante: "NOTA_FISCAL",
       });
       setFile(null);
     }
@@ -166,17 +169,28 @@ export function LancamentoFormDialog({
         criadoPorId: user.backendId,
         caixaId: formData.caixaId || undefined,
         status: formData.status,
+        tipoComprovante: formData.tipoComprovante,
       };
 
+      const wantedStatus = payload.status;
+      const wantedTipoComprovante = payload.tipoComprovante;
+
+      const saved = lancamentoToEdit
+        ? await lancamentoService.update(
+            lancamentoToEdit.id,
+            payload,
+            file || undefined,
+          )
+        : await lancamentoService.create(payload, file || undefined);
+
+      const wasDowngradedByPolicy =
+        payload.tipo === "DESPESA" &&
+        wantedStatus === "REGISTRADO" &&
+        saved.status === "RASCUNHO";
+
       if (lancamentoToEdit) {
-        await lancamentoService.update(
-          lancamentoToEdit.id,
-          payload,
-          file || undefined,
-        );
         toast.success("Lançamento atualizado!");
       } else {
-        await lancamentoService.create(payload, file || undefined);
         if (templateName.trim()) {
           await lancamentoService.createTemplate({
             nome: templateName.trim(),
@@ -191,6 +205,19 @@ export function LancamentoFormDialog({
         }
         toast.success("Lançamento criado!");
       }
+
+      if (wasDowngradedByPolicy) {
+        if (wantedTipoComprovante === "RECIBO") {
+          toast.warning(
+            "Mantido em Rascunho: recibo excede o limite em salários mínimos para a data do lançamento.",
+          );
+        } else {
+          toast.warning(
+            "Mantido em Rascunho: para despesa registrada, o comprovante fiscal é obrigatório.",
+          );
+        }
+      }
+
       onSuccess();
       onOpenChange(false);
     } catch (error) {
@@ -442,6 +469,24 @@ export function LancamentoFormDialog({
             <h3 className="font-medium text-sm">Status e Comprovante</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
+                <Label htmlFor="tipoComprovante">Tipo de Comprovante</Label>
+                <select
+                  id="tipoComprovante"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={formData.tipoComprovante}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      tipoComprovante: e.target.value as "NOTA_FISCAL" | "RECIBO",
+                    })
+                  }
+                >
+                  <option value="NOTA_FISCAL">Nota Fiscal</option>
+                  <option value="RECIBO">Recibo</option>
+                </select>
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="comprovante">
                   {lancamentoToEdit
                     ? "Substituir Comprovante"
@@ -492,6 +537,13 @@ export function LancamentoFormDialog({
                   !lancamentoToEdit?.comprovante_url && (
                     <p className="text-xs text-yellow-600">
                       Anexe comprovante para registrar.
+                    </p>
+                  )}
+                {formData.tipo === "DESPESA" &&
+                  formData.tipoComprovante === "RECIBO" && (
+                    <p className="text-xs text-amber-700">
+                      Para recibo, o sistema aplica limite por salário mínimo da
+                      data do lançamento.
                     </p>
                   )}
               </div>

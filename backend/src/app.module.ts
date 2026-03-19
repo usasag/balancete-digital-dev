@@ -18,6 +18,8 @@ import { PeriodoModule } from './periodo/periodo.module';
 import { CategoriaFinanceiraModule } from './categoria-financeira/categoria-financeira.module';
 import { UsuarioTaxaModule } from './usuario-taxa/usuario-taxa.module';
 import { FileStorageModule } from './file-storage/file-storage.module';
+import { SalarioMinimoModule } from './salario-minimo/salario-minimo.module';
+import { AuditoriaModule } from './auditoria/auditoria.module';
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { FileStorageModule } from './file-storage/file-storage.module';
     CategoriaFinanceiraModule,
     UsuarioTaxaModule,
     FileStorageModule,
+    SalarioMinimoModule,
+    AuditoriaModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController],

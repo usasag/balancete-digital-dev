@@ -51,6 +51,38 @@ export class ConfiguracaoFinanceira {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 12.0 })
   valor_repasse_regiao: number;
 
+  @Column({
+    name: 'politica_recibo_sem_nota_ativa',
+    type: 'boolean',
+    default: true,
+  })
+  politicaReciboSemNotaAtiva: boolean;
+
+  @Column({
+    name: 'politica_recibo_limite_salarios_minimos',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 1,
+  })
+  politicaReciboLimiteSalariosMinimos: number;
+
+  @Column({
+    name: 'politica_aprovacao_dupla_ativa',
+    type: 'boolean',
+    default: true,
+  })
+  politicaAprovacaoDuplaAtiva: boolean;
+
+  @Column({
+    name: 'politica_aprovacao_dupla_limite',
+    type: 'decimal',
+    precision: 15,
+    scale: 2,
+    default: 5000,
+  })
+  politicaAprovacaoDuplaLimite: number;
+
   @CreateDateColumn()
   data_criacao: Date;
 

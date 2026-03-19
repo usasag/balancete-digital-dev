@@ -25,13 +25,13 @@ export class LancamentoTemplate {
   @Column()
   categoria: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   subcategoria: string | null;
 
   @Column()
   descricao: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   observacao: string | null;
 
   @Column({ type: 'decimal', precision: 15, scale: 2 })
@@ -41,7 +41,7 @@ export class LancamentoTemplate {
   @JoinColumn({ name: 'caixa_id' })
   caixa: Caixa | null;
 
-  @Column({ name: 'caixa_id', nullable: true })
+  @Column({ name: 'caixa_id', type: 'varchar', nullable: true })
   caixaId: string | null;
 
   @ManyToOne(() => Nucleo, { onDelete: 'CASCADE' })
@@ -55,7 +55,7 @@ export class LancamentoTemplate {
   @JoinColumn({ name: 'criado_por_id' })
   criadoPor: Usuario | null;
 
-  @Column({ name: 'criado_por_id', nullable: true })
+  @Column({ name: 'criado_por_id', type: 'varchar', nullable: true })
   criadoPorId: string | null;
 
   @Column({ default: true })

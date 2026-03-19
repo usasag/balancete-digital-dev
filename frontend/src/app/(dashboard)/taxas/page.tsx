@@ -449,6 +449,80 @@ export default function TaxasPage() {
                         </p>
                       </div>
                     </div>
+
+                    <div className="space-y-4 p-4 border rounded-md md:col-span-2">
+                      <h3 className="font-medium">Política de Comprovante em Recibos</h3>
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          checked={!!config.politicaReciboSemNotaAtiva}
+                          onCheckedChange={(checked) =>
+                            setConfig({
+                              ...config,
+                              politicaReciboSemNotaAtiva: Boolean(checked),
+                            })
+                          }
+                        />
+                        <Label>
+                          Ativar bloqueio de despesa com recibo acima do limite
+                        </Label>
+                      </div>
+                      <div className="space-y-2 max-w-sm">
+                        <Label>Limite (em salários mínimos)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={config.politicaReciboLimiteSalariosMinimos || 1}
+                          onChange={(e) =>
+                            setConfig({
+                              ...config,
+                              politicaReciboLimiteSalariosMinimos: Number(
+                                e.target.value || 1,
+                              ),
+                            })
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          A validação usa o salário mínimo vigente na data do
+                          lançamento.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 p-4 border rounded-md md:col-span-2">
+                      <h3 className="font-medium">Política de Aprovação por Alçada</h3>
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          checked={!!config.politicaAprovacaoDuplaAtiva}
+                          onCheckedChange={(checked) =>
+                            setConfig({
+                              ...config,
+                              politicaAprovacaoDuplaAtiva: Boolean(checked),
+                            })
+                          }
+                        />
+                        <Label>Ativar dupla validação por valor</Label>
+                      </div>
+                      <div className="space-y-2 max-w-sm">
+                        <Label>Limite da alçada (R$)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={config.politicaAprovacaoDuplaLimite || 5000}
+                          onChange={(e) =>
+                            setConfig({
+                              ...config,
+                              politicaAprovacaoDuplaLimite: Number(
+                                e.target.value || 5000,
+                              ),
+                            })
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Balancetes com total de despesas acima deste valor exigem
+                          aprovação de Tesouraria/Presidência e Conselho Fiscal.
+                        </p>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex justify-end pt-4">

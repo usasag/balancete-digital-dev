@@ -24,6 +24,26 @@ export interface Periodo {
   pendencias?: number;
 }
 
+export interface PreFechamentoChecklist {
+  lancamentosRascunho: number;
+  mensalidadesPendentes: number;
+  totalPendenciasCriticas: number;
+  bloqueiaFechamento: boolean;
+}
+
+export interface DashboardAlert {
+  code: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  message: string;
+}
+
+export interface DashboardAlertResponse {
+  generatedAt: string;
+  total: number;
+  alertas: DashboardAlert[];
+}
+
 export const periodoService = {
   findAllByNucleo: async (nucleoId: string): Promise<Periodo[]> => {
     const response = await api.get(`/periodos/nucleo/${nucleoId}`);
@@ -42,6 +62,24 @@ export const periodoService = {
 
   reabrir: async (id: string, justificativa: string): Promise<Periodo> => {
     const response = await api.post(`/periodos/reabrir/${id}`, { justificativa });
+    return response.data;
+  },
+
+  getChecklist: async (
+    mes: number,
+    ano: number,
+    nucleoId: string,
+  ): Promise<PreFechamentoChecklist> => {
+    const response = await api.get(
+      `/periodos/checklist?mes=${mes}&ano=${ano}&nucleoId=${nucleoId}`,
+    );
+    return response.data;
+  },
+
+  getAlertas: async (nucleoId: string): Promise<DashboardAlertResponse> => {
+    const response = await api.get<DashboardAlertResponse>(
+      `/periodos/alertas/${nucleoId}`,
+    );
     return response.data;
   },
 };

@@ -235,7 +235,7 @@ export default function NovaMensalidade() {
                   setFormData({ ...formData, caixaId: e.target.value })
                 }
               >
-                <option value="">Selecione a Caixa...</option>
+                <option value="">Selecione o Caixa...</option>
                 {caixas.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.nome}

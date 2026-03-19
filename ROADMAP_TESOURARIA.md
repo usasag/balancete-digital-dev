@@ -54,21 +54,21 @@ Reduzir o esforco operacional da tesouraria de 10+ horas/semana para 2-4 horas/s
 | E2-04 | Implementar upload para Google Drive por pasta padrao (Nucleo/Ano/Mes/Tipo) | Alta | Dev | done | Arquivo sobe na pasta correta automaticamente |
 | E2-05 | Implementar listagem e visualizacao de evidencias por lancamento/mensalidade | Alta | Dev | done | Usuario visualiza anexos vinculados |
 | E2-06 | Definir e aplicar nomenclatura padrao de arquivos | Media | Produto + Dev | done | Nome de arquivo padrao gerado automaticamente |
-| E2-07 | Tela de anexo/consulta no frontend integrada ao Drive | Alta | Dev | pending | Fluxo completo anexar/abrir/remover vinculo |
-| E2-08 | Migracao das evidencias antigas (vinculacao em lote) | Alta | Dev + Tesouraria | pending | Importacao com log de sucesso/erro |
-| E2-09 | Tratamento de arquivo movido/removido no Drive | Media | Dev | pending | Sistema sinaliza link quebrado e permite relink |
-| E2-10 | Auditoria de evidencias (quem anexou/trocou/quando) | Alta | Dev | pending | Historico consultavel por registro |
-| E2-11 | Regra de obrigatoriedade de comprovante por tipo/valor/status | Alta | Dev + Produto | pending | Bloqueio/alerta aplicado conforme politica |
+| E2-07 | Tela de anexo/consulta no frontend integrada ao Drive | Alta | Dev | done | Fluxo completo anexar/abrir/remover vinculo |
+| E2-08 | Migracao das evidencias antigas (vinculacao em lote) | Alta | Dev + Tesouraria | done | Importacao com log de sucesso/erro |
+| E2-09 | Tratamento de arquivo movido/removido no Drive | Media | Dev | done | Sistema sinaliza link quebrado e permite relink |
+| E2-10 | Auditoria de evidencias (quem anexou/trocou/quando) | Alta | Dev | done | Historico consultavel por registro |
+| E2-11 | Regra de obrigatoriedade de comprovante por tipo/valor/status | Alta | Dev + Produto | done | Bloqueio/alerta aplicado conforme politica |
 
 ### EPIC 3 - Controle e governanca
 
 | ID | Tarefa | Prioridade | Responsavel | Status | Criterio de aceite |
 |---|---|---|---|---|---|
-| E3-01 | Fechamento hard-lock de periodo | Alta | Dev | pending | Periodo fechado nao permite alteracoes |
-| E3-02 | Reabertura com justificativa obrigatoria | Alta | Dev | pending | Reabertura salva justificativa e autor |
-| E3-03 | Trilha de auditoria de-para nas entidades criticas | Alta | Dev | pending | Alteracoes registradas com before/after |
-| E3-04 | Permissoes granulares por acao | Alta | Dev | pending | Acoes sensiveis restritas por permissao |
-| E3-05 | Fluxo de aprovacao por alcada (dupla validacao) | Media | Dev + Produto | pending | Valores acima do limite exigem aprovacao |
+| E3-01 | Fechamento hard-lock de periodo | Alta | Dev | done | Periodo fechado nao permite alteracoes |
+| E3-02 | Reabertura com justificativa obrigatoria | Alta | Dev | done | Reabertura salva justificativa e autor |
+| E3-03 | Trilha de auditoria de-para nas entidades criticas | Alta | Dev | done | Alteracoes registradas com before/after |
+| E3-04 | Permissoes granulares por acao | Alta | Dev | done | Acoes sensiveis restritas por permissao |
+| E3-05 | Fluxo de aprovacao por alcada (dupla validacao) | Media | Dev + Produto | done | Valores acima do limite exigem aprovacao |
 
 ### EPIC 4 - Conciliacao e fechamento assistido
 
@@ -77,8 +77,8 @@ Reduzir o esforco operacional da tesouraria de 10+ horas/semana para 2-4 horas/s
 | E4-01 | Importacao de extrato bancario (OFX/CSV) | Media | Dev | in_progress | Extrato processado com normalizacao |
 | E4-02 | Matching semiautomatico lancamento x extrato | Media | Dev | pending | Sugestoes de conciliacao com score |
 | E4-03 | Fila de divergencias para tratamento | Media | Dev | pending | Divergencias editaveis e rastreaveis |
-| E4-04 | Checklist pre-fechamento automatico | Alta | Dev | pending | Fechamento bloqueado com pendencias criticas |
-| E4-05 | Alertas automáticos (pendencias, atraso de processo) | Media | Dev | pending | Alertas visiveis no dashboard |
+| E4-04 | Checklist pre-fechamento automatico | Alta | Dev | done | Fechamento bloqueado com pendencias criticas |
+| E4-05 | Alertas automáticos (pendencias, atraso de processo) | Media | Dev | done | Alertas visiveis no dashboard |
 
 ### EPIC 5 - Relatorios e continuidade institucional
 
@@ -140,7 +140,7 @@ Reduzir o esforco operacional da tesouraria de 10+ horas/semana para 2-4 horas/s
 - E2-04 concluido (upload com hierarquia Nucleo/Ano/Mes/Domain/Tipo)
 - E2-05 concluido (coluna de evidencia com acesso direto em lancamentos e mensalidades)
 - E2-06 concluido (nomenclatura padrao automatica no upload)
-- E2-07 pendente
+- E2-07 concluido (fluxo completo no frontend: anexar/abrir/remover vinculo em lancamentos e mensalidades, com status do provider)
 
 ## Sprint 4 (Semanas 7-8)
 - E2-08, E2-09, E2-10, E2-11
@@ -148,11 +148,26 @@ Reduzir o esforco operacional da tesouraria de 10+ horas/semana para 2-4 horas/s
 
 **Meta:** migrar acervo existente e travar processo por governanca.
 
+**Status atual:**
+- E2-08 concluido (importacao em lote de evidencias antigas para lancamentos/mensalidades com preview, processamento e logs)
+- E2-09 concluido (verificacao de saude da evidencia com status HEALTHY/BROKEN/UNKNOWN e suporte de relink no frontend)
+- E2-10 concluido (auditoria de evidencias com trilha ATTACH/RELINK/REMOVE/MIGRATION_LINK e consulta por entidade/registro)
+- E2-11 concluido (politica configuravel de recibo por multiplo de salario minimo na data do lancamento + suporte a baixa parcial em mensalidades)
+
 ## Sprint 5 (Semanas 9-10)
 - E3-03, E3-04, E3-05
 - E4-04, E4-05
 
 **Meta:** auditoria forte + controles de aprovacao + fechamento assistido.
+
+**Status atual:**
+- E3-01 concluido (hard-lock efetivo no create/update/remove de lancamentos e em fluxos que dependem de checkPermissao)
+- E3-02 concluido (reabertura exige justificativa minima, salva autor correto e registra historico no periodo)
+- E3-03 concluido (auditoria centralizada em lancamentos, mensalidades e periodos com before/after e endpoint de consulta por nucleo)
+- E3-04 concluido (permissoes por acao aplicadas em lancamentos, mensalidades, periodos e auditoria via matriz ROLE x ACTION)
+- E3-05 concluido (dupla validacao por alcada configuravel em balancetes com limite por valor de despesas)
+- E4-04 concluido (checklist pre-fechamento com bloqueio por rascunhos e mensalidades pendentes + endpoint e UI dedicados)
+- E4-05 concluido (alertas automaticos de rascunho, pendencias, periodo anterior aberto e inadimplencia no dashboard)
 
 ## Sprint 6 (Semanas 11-12)
 - E4-01, E4-02, E4-03

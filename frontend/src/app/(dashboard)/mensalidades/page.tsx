@@ -65,6 +65,8 @@ import {
   Trash2,
   FileText,
 } from "lucide-react";
+import { toast } from "sonner";
+import { EvidenceCell } from "@/components/evidencia/evidence-cell";
 
 export default function MensalidadeDashboard() {
   const ALL_FILTER_VALUE = "__ALL__";
@@ -88,6 +90,7 @@ export default function MensalidadeDashboard() {
   >([]);
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [receiverId, setReceiverId] = useState<string | undefined>(undefined);
+  const [paymentAmount, setPaymentAmount] = useState<string>("");
   const [paymentDate, setPaymentDate] = useState<string>(
     new Date().toISOString().split("T")[0],
   );
@@ -102,11 +105,22 @@ export default function MensalidadeDashboard() {
   const [referenceMonth, setReferenceMonth] = useState<string>(
     new Date().toISOString().slice(0, 7),
   );
+  const [driveProvider, setDriveProvider] = useState<
+    "LOCAL_TEST" | "GOOGLE_DRIVE"
+  >("LOCAL_TEST");
+  const [loadingDriveStatus, setLoadingDriveStatus] = useState(false);
+  const [evidenceHealthById, setEvidenceHealthById] = useState<
+    Record<string, { status: "HEALTHY" | "BROKEN" | "MISSING" | "UNKNOWN"; message: string }>
+  >({});
+
+  const canManageEvidence =
+    user?.role === "TESOURARIA" || user?.role === "ADMIN_GLOBAL";
 
   useEffect(() => {
     // Reset date when dialogs close/open
     if (!payPixDialog && !payMoneyDialog && !agreementDialog) {
       setPaymentDate(new Date().toISOString().split("T")[0]);
+      setPaymentAmount("");
     }
   }, [payPixDialog, payMoneyDialog, agreementDialog]);
 
@@ -177,9 +191,62 @@ export default function MensalidadeDashboard() {
     }
   }, [user, isAdmin]);
 
+  const fetchDriveStatus = useCallback(async () => {
+    setLoadingDriveStatus(true);
+    try {
+      const status = await mensalidadeService.getDriveEvidenceStatus();
+      setDriveProvider(status.provider);
+    } catch {
+      setDriveProvider("LOCAL_TEST");
+    } finally {
+      setLoadingDriveStatus(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchMensalidades();
-  }, [fetchMensalidades]);
+    fetchDriveStatus();
+  }, [fetchMensalidades, fetchDriveStatus]);
+
+  const handleUploadEvidence = async (mensalidadeId: string, file: File) => {
+    try {
+      await mensalidadeService.uploadEvidence(mensalidadeId, file);
+      toast.success("Evidência anexada com sucesso.");
+      await fetchMensalidades();
+    } catch {
+      toast.error("Falha ao anexar evidência.");
+    }
+  };
+
+  const handleRemoveEvidence = async (mensalidadeId: string) => {
+    try {
+      await mensalidadeService.clearEvidence(mensalidadeId);
+      toast.success("Vínculo de evidência removido.");
+      await fetchMensalidades();
+    } catch {
+      toast.error("Falha ao remover evidência.");
+    }
+  };
+
+  const handleCheckEvidenceHealth = async (mensalidadeId: string) => {
+    try {
+      const result = await mensalidadeService.getEvidenceHealth(mensalidadeId);
+      setEvidenceHealthById((prev) => ({
+        ...prev,
+        [mensalidadeId]: { status: result.status, message: result.message },
+      }));
+
+      if (result.status === "BROKEN") {
+        toast.error("Link de evidência quebrado. Use 'Trocar' para relink.");
+      } else if (result.status === "HEALTHY") {
+        toast.success("Evidência validada com sucesso.");
+      } else {
+        toast.info(result.message);
+      }
+    } catch {
+      toast.error("Não foi possível verificar a evidência.");
+    }
+  };
 
   const handlePayPix = async () => {
     if (!payPixDialog) return;
@@ -190,6 +257,8 @@ export default function MensalidadeDashboard() {
     await confirmPayment(
       payPixDialog.id,
       paymentDate ? new Date(paymentDate) : undefined,
+      Number(paymentAmount || 0) || undefined,
+      "PIX",
     );
     setPayPixDialog(null);
     setProofFile(null);
@@ -204,6 +273,9 @@ export default function MensalidadeDashboard() {
     await confirmPayment(
       payMoneyDialog.id,
       paymentDate ? new Date(paymentDate) : undefined,
+      Number(paymentAmount || 0) || undefined,
+      "DINHEIRO",
+      receiverId,
     );
     setPayMoneyDialog(null);
     setReceiverId(undefined);
@@ -225,9 +297,19 @@ export default function MensalidadeDashboard() {
     }
   };
 
-  const confirmPayment = async (id: string, date?: Date) => {
+  const confirmPayment = async (
+    id: string,
+    date?: Date,
+    valor?: number,
+    metodoPagamento?: "PIX" | "DINHEIRO" | "TRANSFERENCIA" | "OUTRO",
+    recebidoPorId?: string,
+  ) => {
     try {
-      await mensalidadeService.pay(id, date);
+      await mensalidadeService.pay(id, date, {
+        valor,
+        metodoPagamento,
+        recebidoPorId,
+      });
       fetchMensalidades();
       alert("Pagamento registrado com sucesso!");
     } catch (error) {
@@ -300,6 +382,8 @@ export default function MensalidadeDashboard() {
         return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800";
       case "PENDENTE":
         return "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700";
+      case "PARCIAL":
+        return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-800";
       case "ATRASADO":
         return "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-orange-200 dark:border-orange-800";
       case "INADIMPLENTE":
@@ -352,6 +436,11 @@ export default function MensalidadeDashboard() {
               </TableCell>
               <TableCell className="text-right">
                 {formatCurrency(item.valor_total || item.valor)}
+                {Number(item.saldo_aberto || 0) > 0 && (
+                  <span className="block text-xs text-muted-foreground">
+                    Saldo: {formatCurrency(Number(item.saldo_aberto || 0))}
+                  </span>
+                )}
               </TableCell>
               <TableCell>
                 {item.data_pagamento
@@ -361,18 +450,15 @@ export default function MensalidadeDashboard() {
                     : "-"}
               </TableCell>
               <TableCell>
-                {item.evidenciaWebViewLink ? (
-                  <a
-                    href={item.evidenciaWebViewLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs underline text-primary"
-                  >
-                    Ver evidência
-                  </a>
-                ) : (
-                  <span className="text-xs text-muted-foreground">-</span>
-                )}
+                <EvidenceCell
+                  link={item.evidenciaWebViewLink}
+                  healthStatus={evidenceHealthById[item.id]?.status}
+                  healthMessage={evidenceHealthById[item.id]?.message}
+                  canManage={canManageEvidence}
+                  onUpload={(file) => handleUploadEvidence(item.id, file)}
+                  onRemove={() => handleRemoveEvidence(item.id)}
+                  onCheckHealth={() => handleCheckEvidenceHealth(item.id)}
+                />
               </TableCell>
               <TableCell className="text-right">
                 {showActions && (
@@ -554,28 +640,37 @@ export default function MensalidadeDashboard() {
     <div className="p-4 md:p-8 space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold tracking-tight">Mensalidades</h1>
-        {isAdmin && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button asChild>
-              <Link href="/mensalidades/novo">
-                <Plus className="mr-2 h-4 w-4" /> Registrar Mensalidade
-              </Link>
-            </Button>
-            <Input
-              type="month"
-              value={referenceMonth}
-              onChange={(e) => setReferenceMonth(e.target.value)}
-              className="w-[180px]"
-            />
-            <Button
-              variant="outline"
-              onClick={handleGenerateReference}
-              disabled={generatingReference}
-            >
-              Gerar mensalidades do mês
-            </Button>
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-2 justify-end">
+          {isAdmin && (
+            <>
+              <Button asChild>
+                <Link href="/mensalidades/novo">
+                  <Plus className="mr-2 h-4 w-4" /> Registrar Mensalidade
+                </Link>
+              </Button>
+              <Input
+                type="month"
+                value={referenceMonth}
+                onChange={(e) => setReferenceMonth(e.target.value)}
+                className="w-[180px]"
+              />
+              <Button
+                variant="outline"
+                onClick={handleGenerateReference}
+                disabled={generatingReference}
+              >
+                Gerar mensalidades do mês
+              </Button>
+            </>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {loadingDriveStatus
+              ? "Verificando provider de evidência..."
+              : driveProvider === "GOOGLE_DRIVE"
+                ? "Evidências: Google Drive"
+                : "Evidências: modo local de teste"}
+          </span>
+        </div>
       </div>
 
       {isAdmin ? (
@@ -620,6 +715,7 @@ export default function MensalidadeDashboard() {
                     <SelectContent>
                       <SelectItem value={ALL_FILTER_VALUE}>Todos</SelectItem>
                       <SelectItem value="PAGO">Pago</SelectItem>
+                      <SelectItem value="PARCIAL">Parcial</SelectItem>
                       <SelectItem value="PENDENTE">Pendente</SelectItem>
                       <SelectItem value="ATRASADO">Atrasado</SelectItem>
                       <SelectItem value="INADIMPLENTE">Inadimplente</SelectItem>
@@ -793,6 +889,11 @@ export default function MensalidadeDashboard() {
                             </TableCell>
                             <TableCell className="text-right">
                               {formatCurrency(item.valor_total || item.valor)}
+                              {Number(item.saldo_aberto || 0) > 0 && (
+                                <span className="block text-xs text-muted-foreground">
+                                  Saldo: {formatCurrency(Number(item.saldo_aberto || 0))}
+                                </span>
+                              )}
                             </TableCell>
                             <TableCell>
                               {item.data_pagamento
@@ -804,20 +905,19 @@ export default function MensalidadeDashboard() {
                                   : "-"}
                             </TableCell>
                             <TableCell>
-                              {item.evidenciaWebViewLink ? (
-                                <a
-                                  href={item.evidenciaWebViewLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-xs underline text-primary"
-                                >
-                                  Ver evidência
-                                </a>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">
-                                  -
-                                </span>
-                              )}
+                              <EvidenceCell
+                                link={item.evidenciaWebViewLink}
+                                healthStatus={evidenceHealthById[item.id]?.status}
+                                healthMessage={evidenceHealthById[item.id]?.message}
+                                canManage={canManageEvidence}
+                                onUpload={(file) =>
+                                  handleUploadEvidence(item.id, file)
+                                }
+                                onRemove={() => handleRemoveEvidence(item.id)}
+                                onCheckHealth={() =>
+                                  handleCheckEvidenceHealth(item.id)
+                                }
+                              />
                             </TableCell>
                             <TableCell className="text-right">
                               <DropdownMenu>
@@ -1066,6 +1166,16 @@ export default function MensalidadeDashboard() {
                     onChange={(e) => setPaymentDate(e.target.value)}
                   />
                 </div>
+                <div className="grid w-full gap-2 mb-4">
+                  <Label>Valor recebido (opcional)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    placeholder="Deixe vazio para quitar o saldo"
+                  />
+                </div>
 
                 <h3 className="font-semibold mb-2">Comprovante de Pagamento</h3>
                 <p className="text-sm text-muted-foreground mb-4">
@@ -1142,6 +1252,16 @@ export default function MensalidadeDashboard() {
                     type="date"
                     value={paymentDate}
                     onChange={(e) => setPaymentDate(e.target.value)}
+                  />
+                </div>
+                <div className="grid w-full gap-2 mb-4">
+                  <Label>Valor recebido (opcional)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    placeholder="Deixe vazio para quitar o saldo"
                   />
                 </div>
 

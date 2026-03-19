@@ -9,6 +9,7 @@ import { BalanceteMensal, BalanceteStatus } from './balancete.entity';
 import { BalanceteAprovacao } from './balancete-aprovacao.entity';
 import { Usuario } from '../usuario/usuario.entity';
 import { Role } from '../common/enums/role.enum';
+import { ConfiguracaoService } from '../configuracao/configuracao.service';
 
 import { LancamentoFinanceiro } from '../lancamento/lancamento.entity';
 import dayjs from 'dayjs';
@@ -25,6 +26,7 @@ export class BalanceteService {
     private lancamentoRepository: Repository<LancamentoFinanceiro>,
     @InjectRepository(Usuario)
     private usuarioRepository: Repository<Usuario>,
+    private configuracaoService: ConfiguracaoService,
   ) {}
 
   async create(
@@ -146,13 +148,21 @@ export class BalanceteService {
     status: 'APROVADO' | 'REPROVADO',
     ressalva?: string,
   ): Promise<BalanceteMensal> {
-    console.error('DEBUG: Approve Start', id, user.role);
     const balancete = await this.findOne(id);
 
     // Validar se pode aprovar
     if (balancete.status === BalanceteStatus.PUBLICADO) {
       throw new BadRequestException(
         'Balancete já publicado não pode ser alterado.',
+      );
+    }
+
+    const existingApproval = await this.aprovacaoRepository.findOne({
+      where: { balanceteId: id, usuarioId: user.id },
+    });
+    if (existingApproval) {
+      throw new BadRequestException(
+        'Usuário já realizou aprovação/reprovação neste balancete.',
       );
     }
 
@@ -166,13 +176,20 @@ export class BalanceteService {
       ressalva,
     } as DeepPartial<BalanceteAprovacao>);
 
-    const saved = await this.aprovacaoRepository.save(aprovacao);
-    console.error('DEBUG: Aprovacao Saved', saved.id, saved.role_aprovador);
+    await this.aprovacaoRepository.save(aprovacao);
 
     // Lógica da State Machine
     const allApprovals = await this.aprovacaoRepository.find({
       where: { balanceteId: id },
     });
+
+    const config = await this.configuracaoService.findOneByNucleo(
+      balancete.nucleoId,
+    );
+    const limiteDupla = Number(config.politicaAprovacaoDuplaLimite || 0);
+    const requerDuplaAprovacao =
+      config.politicaAprovacaoDuplaAtiva &&
+      Number(balancete.total_despesas || 0) >= limiteDupla;
 
     const tesourariaApproved = allApprovals.some(
       (a) =>
@@ -188,17 +205,54 @@ export class BalanceteService {
         a.status === 'APROVADO',
     );
 
-    if (tesourariaApproved && conselhoApproved) {
-      console.error('DEBUG: TRANSITIONING TO APROVADO');
+    const approvedUsers = new Set(
+      allApprovals
+        .filter((a) => a.status === 'APROVADO' && a.usuarioId)
+        .map((a) => a.usuarioId),
+    );
+
+    const hasReprovacao = allApprovals.some((a) => a.status === 'REPROVADO');
+
+    if (hasReprovacao && status === 'REPROVADO') {
       await this.balanceteRepository.update(id, {
-        status: BalanceteStatus.APROVADO,
+        status: BalanceteStatus.APROVADO_COM_RESSALVAS,
       });
-      balancete.status = BalanceteStatus.APROVADO;
+      balancete.status = BalanceteStatus.APROVADO_COM_RESSALVAS;
+      return balancete;
+    }
+
+    if (requerDuplaAprovacao) {
+      if (tesourariaApproved && conselhoApproved && approvedUsers.size >= 2) {
+        await this.balanceteRepository.update(id, {
+          status: hasReprovacao
+            ? BalanceteStatus.APROVADO_COM_RESSALVAS
+            : BalanceteStatus.APROVADO,
+        });
+        balancete.status = hasReprovacao
+          ? BalanceteStatus.APROVADO_COM_RESSALVAS
+          : BalanceteStatus.APROVADO;
+      } else {
+        await this.balanceteRepository.update(id, {
+          status: BalanceteStatus.EM_APROVACAO,
+        });
+        balancete.status = BalanceteStatus.EM_APROVACAO;
+      }
+      return balancete;
+    }
+
+    if (tesourariaApproved) {
+      await this.balanceteRepository.update(id, {
+        status: hasReprovacao
+          ? BalanceteStatus.APROVADO_COM_RESSALVAS
+          : BalanceteStatus.APROVADO,
+      });
+      balancete.status = hasReprovacao
+        ? BalanceteStatus.APROVADO_COM_RESSALVAS
+        : BalanceteStatus.APROVADO;
     } else if (
       balancete.status === BalanceteStatus.RASCUNHO &&
       (tesourariaApproved || conselhoApproved)
     ) {
-      console.error('DEBUG: TRANSITIONING TO EM_APROVACAO');
       await this.balanceteRepository.update(id, {
         status: BalanceteStatus.EM_APROVACAO,
       });

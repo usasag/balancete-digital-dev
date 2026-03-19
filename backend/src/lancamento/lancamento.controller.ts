@@ -12,6 +12,7 @@ import {
   UploadedFile,
   BadRequestException,
   ForbiddenException,
+  Query,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { LancamentoService } from './lancamento.service';
@@ -25,6 +26,10 @@ import * as XLSX from 'xlsx';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { parseOfxTransactions, ofxTransactionsToImportRows } from './ofx-parser';
+import { MensalidadeService } from '../mensalidade/mensalidade.service';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { PermissionsService } from '../auth/permissions.service';
+import { PermissionAction } from '../auth/permission-action.enum';
 
 // Define the Multer file type explicitly since Express types may not be available globally
 interface MulterFile {
@@ -47,7 +52,14 @@ interface CreateLancamentoBody {
   nucleoId: string;
   criadoPorId: string;
   caixaId?: string;
+  contaBancariaId?: string;
   status?: 'RASCUNHO' | 'REGISTRADO';
+  tipoComprovante?: 'NOTA_FISCAL' | 'RECIBO';
+}
+
+interface ImportDefaultsBody {
+  caixaId?: string;
+  contaBancariaId?: string;
 }
 
 interface ImportResult {
@@ -61,6 +73,9 @@ export class LancamentoController {
   constructor(
     private readonly service: LancamentoService,
     private readonly fileStorageService: FileStorageService,
+    private readonly mensalidadeService: MensalidadeService,
+    private readonly auditoriaService: AuditoriaService,
+    private readonly permissionsService: PermissionsService,
   ) {}
 
   private parseSpreadsheet(file: MulterFile): Record<string, unknown>[] {
@@ -81,12 +96,26 @@ export class LancamentoController {
     });
   }
 
-  private parseImportRowsFromFile(file: MulterFile): Record<string, unknown>[] {
+  private parseImportRowsFromFile(
+    file: MulterFile,
+    defaults?: ImportDefaultsBody,
+  ): Record<string, unknown>[] {
     const lowerName = file.originalname.toLowerCase();
     if (lowerName.endsWith('.ofx')) {
       const content = file.buffer.toString('utf-8');
       const txs = parseOfxTransactions(content);
-      return ofxTransactionsToImportRows(txs);
+      return ofxTransactionsToImportRows(txs, {
+        caixaId: defaults?.caixaId,
+        contaBancariaId: defaults?.contaBancariaId,
+      });
+    }
+    return this.parseSpreadsheet(file);
+  }
+
+  private parseEvidenceRowsFromFile(file: MulterFile): Record<string, unknown>[] {
+    const lowerName = file.originalname.toLowerCase();
+    if (lowerName.endsWith('.ofx')) {
+      throw new BadRequestException('Arquivo OFX não é suportado para migração.');
     }
     return this.parseSpreadsheet(file);
   }
@@ -98,6 +127,7 @@ export class LancamentoController {
     @Body() body: CreateLancamentoBody,
     @UploadedFile() file?: MulterFile,
   ) {
+    this.permissionsService.ensure(req.user, PermissionAction.LANCAMENTO_CREATE);
     let comprovante_url: string | undefined;
     let evidenciaDriveFileId: string | undefined;
     let evidenciaDriveFolderId: string | undefined;
@@ -131,16 +161,37 @@ export class LancamentoController {
       evidenciaWebViewLink,
     };
 
-    return this.service.create(data);
+    const created = await this.service.create(data);
+    await this.auditoriaService.log({
+      entidade: 'LANCAMENTO',
+      entidadeId: created.id,
+      acao: 'CREATE',
+      nucleoId: created.nucleoId,
+      usuarioId: req.user.id,
+      beforeData: null,
+      afterData: {
+        tipo: created.tipo,
+        status: created.status,
+        valor: created.valor,
+        categoria: created.categoria,
+        subcategoria: created.subcategoria,
+        data_movimento: created.data_movimento,
+        tipoComprovante: created.tipoComprovante,
+      },
+    });
+    return created;
   }
 
   @Post('import/preview')
   @UseInterceptors(FileInterceptor('file'))
-  importPreview(@UploadedFile() file?: MulterFile) {
+  importPreview(
+    @UploadedFile() file?: MulterFile,
+    @Body() body?: ImportDefaultsBody,
+  ) {
     if (!file) {
       throw new BadRequestException('Arquivo é obrigatório para prévia.');
     }
-    const rows = this.parseImportRowsFromFile(file);
+    const rows = this.parseImportRowsFromFile(file, body);
     return this.service.buildImportPreview(rows);
   }
 
@@ -149,7 +200,9 @@ export class LancamentoController {
   async importExecute(
     @Request() req: { user: Usuario },
     @UploadedFile() file?: MulterFile,
+    @Body() body?: ImportDefaultsBody,
   ): Promise<ImportResult> {
+    this.permissionsService.ensure(req.user, PermissionAction.LANCAMENTO_IMPORT);
     if (!file) {
       throw new BadRequestException('Arquivo é obrigatório para importação.');
     }
@@ -159,7 +212,7 @@ export class LancamentoController {
       throw new BadRequestException('Usuário sem núcleo vinculado.');
     }
 
-    const rows = this.parseImportRowsFromFile(file);
+    const rows = this.parseImportRowsFromFile(file, body);
     const preview = this.service.buildImportPreview(rows);
     const errors = [...preview.errors];
     let created = 0;
@@ -177,8 +230,10 @@ export class LancamentoController {
           nucleoId,
           criadoPorId: req.user.id,
           caixaId: row.caixaId,
+          contaBancariaId: row.contaBancariaId,
           status: row.status,
           comprovante_url: row.comprovante_url,
+          tipoComprovante: row.tipoComprovante,
         });
         created += 1;
       } catch (error) {
@@ -218,6 +273,154 @@ export class LancamentoController {
     return this.service.findImportLogsByNucleo(nucleoId);
   }
 
+  @Post('import/evidencias/preview')
+  @UseGuards(RolesGuard)
+  @Roles(Role.TESOURARIA, Role.ADMIN_GLOBAL)
+  @UseInterceptors(FileInterceptor('file'))
+  importEvidencePreview(@UploadedFile() file?: MulterFile) {
+    if (!file) {
+      throw new BadRequestException('Arquivo é obrigatório para prévia.');
+    }
+
+    const rows = this.parseEvidenceRowsFromFile(file);
+    return this.service.parseEvidenceMigrationPreview(rows);
+  }
+
+  @Post('import/evidencias/execute')
+  @UseGuards(RolesGuard)
+  @Roles(Role.TESOURARIA, Role.ADMIN_GLOBAL)
+  @UseInterceptors(FileInterceptor('file'))
+  async importEvidenceExecute(
+    @Request() req: { user: Usuario },
+    @UploadedFile() file?: MulterFile,
+  ) {
+    this.permissionsService.ensure(req.user, PermissionAction.EVIDENCIA_MANAGE);
+    if (!file) {
+      throw new BadRequestException('Arquivo é obrigatório para importação.');
+    }
+
+    const nucleoId = req.user.nucleoId;
+    if (!nucleoId) {
+      throw new BadRequestException('Usuário sem núcleo vinculado.');
+    }
+
+    const rows = this.parseEvidenceRowsFromFile(file);
+    const preview = this.service.parseEvidenceMigrationPreview(rows);
+    const errors = [...preview.errors];
+    let processed = 0;
+
+    for (const row of preview.validRows) {
+      try {
+        if (row.entidade === 'LANCAMENTO') {
+          const lancamento = await this.service.findOne(row.id);
+          if (lancamento.nucleoId !== nucleoId) {
+            throw new Error('Lançamento fora do núcleo do usuário.');
+          }
+
+          const anterior = {
+            comprovante_url: lancamento.comprovante_url || null,
+            evidenciaDriveFileId: lancamento.evidenciaDriveFileId || null,
+            evidenciaWebViewLink: lancamento.evidenciaWebViewLink || null,
+          };
+
+          await this.service.update(row.id, {
+            comprovante_url: row.url,
+            evidenciaWebViewLink: row.url,
+          });
+          await this.service.createEvidenceAuditLog({
+            entidade: 'LANCAMENTO',
+            entidadeId: lancamento.id,
+            nucleoId,
+            usuarioId: req.user.id,
+            acao: 'MIGRATION_LINK',
+            anterior,
+            novo: {
+              comprovante_url: row.url,
+              evidenciaWebViewLink: row.url,
+            },
+          });
+          processed += 1;
+          continue;
+        }
+
+        const mensalidade = await this.mensalidadeService.findOne(row.id);
+        if (mensalidade.nucleoId !== nucleoId) {
+          throw new Error('Mensalidade fora do núcleo do usuário.');
+        }
+
+        const anterior = {
+          evidenciaDriveFileId: mensalidade.evidenciaDriveFileId || null,
+          evidenciaWebViewLink: mensalidade.evidenciaWebViewLink || null,
+        };
+
+        await this.mensalidadeService.update(row.id, {
+          evidenciaWebViewLink: row.url,
+        });
+        await this.service.createEvidenceAuditLog({
+          entidade: 'MENSALIDADE',
+          entidadeId: mensalidade.id,
+          nucleoId,
+          usuarioId: req.user.id,
+          acao: 'MIGRATION_LINK',
+          anterior,
+          novo: {
+            evidenciaWebViewLink: row.url,
+          },
+        });
+        processed += 1;
+      } catch (error) {
+        errors.push({
+          linha: row.linha,
+          mensagem: error instanceof Error ? error.message : 'Erro ao migrar',
+        });
+      }
+    }
+
+    await this.service.createEvidenceMigrationLog({
+      nucleoId,
+      usuarioId: req.user.id,
+      arquivoNome: file.originalname,
+      totalLinhas: rows.length,
+      linhasProcessadas: processed,
+      linhasComErro: errors.length,
+      erros: errors,
+    });
+
+    return { processed, errors };
+  }
+
+  @Get('import/evidencias/logs')
+  @UseGuards(RolesGuard)
+  @Roles(Role.TESOURARIA, Role.ADMIN_GLOBAL)
+  async getEvidenceMigrationLogs(@Request() req: { user: Usuario }) {
+    const nucleoId = req.user.nucleoId;
+    if (!nucleoId) {
+      throw new BadRequestException('Usuário sem núcleo vinculado.');
+    }
+
+    return this.service.findEvidenceMigrationLogsByNucleo(nucleoId);
+  }
+
+  @Get('evidencia/auditoria/logs')
+  @UseGuards(RolesGuard)
+  @Roles(Role.TESOURARIA, Role.ADMIN_GLOBAL)
+  async getEvidenceAuditLogs(
+    @Request() req: { user: Usuario },
+    @Query('entidade') entidade?: 'LANCAMENTO' | 'MENSALIDADE',
+    @Query('entidadeId') entidadeId?: string,
+  ) {
+    const nucleoId = req.user.nucleoId;
+    if (!nucleoId) {
+      throw new BadRequestException('Usuário sem núcleo vinculado.');
+    }
+
+    return this.service.findEvidenceAuditLogsByNucleo(
+      nucleoId,
+      entidade,
+      entidadeId,
+    );
+  }
+
   @Post('receitas/evidencia-compartilhada')
   async vincularEvidenciaReceitas(
     @Request() req: { user: Usuario },
@@ -229,6 +432,7 @@ export class LancamentoController {
       comprovante_url: string;
     },
   ) {
+    this.permissionsService.ensure(req.user, PermissionAction.EVIDENCIA_MANAGE);
     const { caixaId, dataInicio, dataFim, comprovante_url } = body;
     if (!caixaId || !dataInicio || !dataFim || !comprovante_url) {
       throw new BadRequestException(
@@ -302,17 +506,52 @@ export class LancamentoController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.service.findOne(id);
+  async findOne(@Param('id') id: string) {
+    const lancamento = await this.service.findOne(id);
+    const health = await this.fileStorageService.checkEvidenceReference({
+      driveFileId: lancamento.evidenciaDriveFileId,
+      url: lancamento.evidenciaWebViewLink || lancamento.comprovante_url,
+    });
+
+    return {
+      ...lancamento,
+      evidenciaStatus: health.status,
+      evidenciaStatusMessage: health.message,
+    };
+  }
+
+  @Get(':id/evidencia/health')
+  async getEvidenceHealth(
+    @Param('id') id: string,
+    @Request() req: { user: Usuario },
+  ) {
+    const lancamento = await this.service.findOne(id);
+    if (lancamento.nucleoId !== req.user.nucleoId) {
+      throw new ForbiddenException('Lançamento fora do núcleo do usuário.');
+    }
+
+    const health = await this.fileStorageService.checkEvidenceReference({
+      driveFileId: lancamento.evidenciaDriveFileId,
+      url: lancamento.evidenciaWebViewLink || lancamento.comprovante_url,
+    });
+
+    return {
+      id: lancamento.id,
+      status: health.status,
+      message: health.message,
+    };
   }
 
   @Put(':id')
   @UseInterceptors(FileInterceptor('file'))
   async update(
     @Param('id') id: string,
+    @Request() req: { user: Usuario },
     @Body() body: CreateLancamentoBody,
     @UploadedFile() file?: MulterFile,
   ) {
+    this.permissionsService.ensure(req.user, PermissionAction.LANCAMENTO_EDIT);
+    const before = await this.service.findOne(id);
     let comprovante_url: string | undefined;
     let evidenciaDriveFileId: string | undefined;
     let evidenciaDriveFolderId: string | undefined;
@@ -346,12 +585,149 @@ export class LancamentoController {
       ...(evidenciaWebViewLink && { evidenciaWebViewLink }),
     };
 
-    return this.service.update(id, data);
+    const updated = await this.service.update(id, data);
+    await this.auditoriaService.log({
+      entidade: 'LANCAMENTO',
+      entidadeId: updated.id,
+      acao: 'UPDATE',
+      nucleoId: updated.nucleoId,
+      usuarioId: req.user.id,
+      beforeData: {
+        tipo: before.tipo,
+        status: before.status,
+        valor: before.valor,
+        categoria: before.categoria,
+        subcategoria: before.subcategoria,
+        data_movimento: before.data_movimento,
+        tipoComprovante: before.tipoComprovante,
+      },
+      afterData: {
+        tipo: updated.tipo,
+        status: updated.status,
+        valor: updated.valor,
+        categoria: updated.categoria,
+        subcategoria: updated.subcategoria,
+        data_movimento: updated.data_movimento,
+        tipoComprovante: updated.tipoComprovante,
+      },
+    });
+    return updated;
+  }
+
+  @Post(':id/evidencia')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadEvidence(
+    @Param('id') id: string,
+    @Request() req: { user: Usuario },
+    @UploadedFile() file?: MulterFile,
+  ) {
+    this.permissionsService.ensure(req.user, PermissionAction.EVIDENCIA_MANAGE);
+    if (!file) {
+      throw new BadRequestException('Arquivo é obrigatório.');
+    }
+
+    const lancamento = await this.service.findOne(id);
+    if (lancamento.nucleoId !== req.user.nucleoId) {
+      throw new ForbiddenException('Lançamento fora do núcleo do usuário.');
+    }
+
+    const anterior = {
+      comprovante_url: lancamento.comprovante_url || null,
+      evidenciaDriveFileId: lancamento.evidenciaDriveFileId || null,
+      evidenciaWebViewLink: lancamento.evidenciaWebViewLink || null,
+    };
+
+    const uploaded = await this.fileStorageService.uploadFileWithMetadata(
+      file.buffer,
+      file.originalname,
+      file.mimetype,
+      lancamento.nucleoId,
+      {
+        tipo: (lancamento.tipo as 'RECEITA' | 'DESPESA') || 'DESPESA',
+        dataMovimento: new Date(lancamento.data_movimento),
+        domain: 'lancamento',
+      },
+    );
+
+    const updated = await this.service.update(id, {
+      comprovante_url: uploaded.url,
+      evidenciaDriveFileId: uploaded.driveFileId || undefined,
+      evidenciaDriveFolderId: uploaded.driveFolderId || undefined,
+      evidenciaWebViewLink: uploaded.webViewLink || undefined,
+      tipoComprovante: 'NOTA_FISCAL',
+      status: 'REGISTRADO',
+    });
+
+    await this.service.createEvidenceAuditLog({
+      entidade: 'LANCAMENTO',
+      entidadeId: lancamento.id,
+      nucleoId: lancamento.nucleoId,
+      usuarioId: req.user.id,
+      acao: anterior.comprovante_url ? 'RELINK' : 'ATTACH',
+      anterior,
+      novo: {
+        comprovante_url: updated.comprovante_url || null,
+        evidenciaDriveFileId: updated.evidenciaDriveFileId || null,
+        evidenciaWebViewLink: updated.evidenciaWebViewLink || null,
+      },
+    });
+
+    return updated;
+  }
+
+  @Delete(':id/evidencia')
+  async clearEvidence(@Param('id') id: string, @Request() req: { user: Usuario }) {
+    this.permissionsService.ensure(req.user, PermissionAction.EVIDENCIA_MANAGE);
+    const lancamento = await this.service.findOne(id);
+    if (lancamento.nucleoId !== req.user.nucleoId) {
+      throw new ForbiddenException('Lançamento fora do núcleo do usuário.');
+    }
+    const anterior = {
+      comprovante_url: lancamento.comprovante_url || null,
+      evidenciaDriveFileId: lancamento.evidenciaDriveFileId || null,
+      evidenciaWebViewLink: lancamento.evidenciaWebViewLink || null,
+    };
+
+    const updated = await this.service.clearEvidence(id);
+    await this.service.createEvidenceAuditLog({
+      entidade: 'LANCAMENTO',
+      entidadeId: lancamento.id,
+      nucleoId: lancamento.nucleoId,
+      usuarioId: req.user.id,
+      acao: 'REMOVE',
+      anterior,
+      novo: {
+        comprovante_url: updated.comprovante_url || null,
+        evidenciaDriveFileId: updated.evidenciaDriveFileId || null,
+        evidenciaWebViewLink: updated.evidenciaWebViewLink || null,
+      },
+    });
+
+    return updated;
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.service.remove(id);
+  async remove(@Param('id') id: string, @Request() req: { user: Usuario }) {
+    this.permissionsService.ensure(req.user, PermissionAction.LANCAMENTO_DELETE);
+    const before = await this.service.findOne(id);
+    await this.service.remove(id);
+    await this.auditoriaService.log({
+      entidade: 'LANCAMENTO',
+      entidadeId: id,
+      acao: 'DELETE',
+      nucleoId: before.nucleoId,
+      usuarioId: req.user.id,
+      beforeData: {
+        tipo: before.tipo,
+        status: before.status,
+        valor: before.valor,
+        categoria: before.categoria,
+        subcategoria: before.subcategoria,
+        data_movimento: before.data_movimento,
+      },
+      afterData: null,
+    });
+    return { success: true };
   }
 
   @Get('templates/nucleo/:id')
